@@ -87,6 +87,39 @@ When you create an `AiSearchToken`, Alchemy:
 
 When the resource is destroyed, both the AI Search token registration and the underlying user API token are cleaned up.
 
+## Permission Requirements
+
+AI Search requires a [service API token](https://developers.cloudflare.com/ai-search/get-started/api/#2-create-a-service-api-token) to access resources in your account on your behalf, such as R2, Vectorize, and Workers AI.
+
+Creating an `AiSearchToken` requires API credentials with **"User API Tokens: Edit"** permission, since it needs to create a user API token under the hood.
+
+If your main credentials don't have this permission, you can provide a pre-created service API token via `serviceApiToken`. Alchemy will use this token directly instead of creating a new one.
+
+```bash
+# Create a service API token with the Alchemy CLI
+alchemy util create-cloudflare-token --god-token
+```
+
+The CLI will output a token value. Add it to your `.env` file:
+
+```bash
+CLOUDFLARE_SERVICE_API_TOKEN=your-token-value-here
+```
+
+Then use it when creating the token:
+
+```ts
+import { alchemy } from "alchemy";
+import { AiSearchToken } from "alchemy/cloudflare";
+
+const token = await AiSearchToken("search-token", {
+  name: "docs-search-token",
+  serviceApiToken: alchemy.secret.env.CLOUDFLARE_SERVICE_API_TOKEN,
+});
+```
+
+This allows your main credentials to remain restricted while providing AI Search with the access it needs.
+
 ## Configuration Options
 
 | Property | Type | Default | Description |
@@ -94,6 +127,7 @@ When the resource is destroyed, both the AI Search token registration and the un
 | `name` | `string` | resource ID | Name of the token |
 | `adopt` | `boolean` | `false` | Adopt an existing token with the same name |
 | `delete` | `boolean` | `true` | Delete the token when removed from Alchemy |
+| `serviceApiToken` | `Secret` | - | Pre-created token for AI Search; if provided, Alchemy uses it directly instead of creating one |
 
 ## Output Properties
 

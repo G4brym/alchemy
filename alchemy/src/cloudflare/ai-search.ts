@@ -1,5 +1,6 @@
 import type { Context } from "../context.ts";
 import { Resource, ResourceKind } from "../resource.ts";
+import type { Secret } from "../secret.ts";
 import { logger } from "../util/logger.ts";
 import {
   AiSearchToken,
@@ -194,6 +195,21 @@ export interface AiSearchProps extends CloudflareApiOptions {
    * @default false
    */
   adopt?: boolean;
+
+  /**
+   * A pre-created service API token that allows AI Search to access resources
+   * in your account on your behalf, such as R2, Vectorize, and Workers AI.
+   *
+   * If provided, Alchemy will use this token directly instead of creating a new one.
+   * The token must have the following permissions:
+   * - AI Search Index Engine
+   * - Workers R2 Storage Write
+   *
+   * You can create one using: `alchemy util create-cloudflare-token`
+   *
+   * See: https://alchemy.run/concepts/cli/#util-create-cloudflare-token
+   */
+  serviceApiToken?: Secret;
 }
 
 /**
@@ -446,6 +462,7 @@ export const AiSearch = Resource(
           accountId: props.accountId,
           baseUrl: props.baseUrl,
           profile: props.profile,
+          serviceApiToken: props.serviceApiToken,
         });
         tokenId = token.tokenId;
       } catch (error) {
@@ -454,22 +471,30 @@ export const AiSearch = Resource(
           [
             `Failed to automatically create AI Search token for "${id}".`,
             "",
-            "AI Search requires a token to access your data source. To create one manually:",
-            "1. Go to Cloudflare Dashboard → AI Search → Tokens",
-            "2. Create a new token with access to your R2 bucket",
-            "3. Copy the token ID and provide it as source.token in your configuration:",
+            "AI Search requires a service API token to access resources in your account on your behalf,",
+            "such as R2, Vectorize, and Workers AI. Creating this token automatically requires credentials",
+            "with 'User API Tokens: Edit' permission.",
             "",
-            `   source: {`,
-            `     type: "${normalizedSource.type}",`,
-            `     ${
-              normalizedSource.type === "r2"
-                ? `bucket: ${sourceBucket},`
-                : `urls: [...],`
-            }`,
-            `     token: "your-token-id-here",`,
-            `   }`,
+            "To fix this, either:",
             "",
-            "See https://developers.cloudflare.com/ai-search/get-started/api/#2-create-a-service-api-token for more details.",
+            "1. Provide a pre-created service API token via the serviceApiToken option (recommended):",
+            "   - Create one: alchemy util create-cloudflare-token",
+            "   - Add the output to your .env: CLOUDFLARE_SERVICE_API_TOKEN=your-token-here",
+            "   - Pass it to your AiSearch resource:",
+            "",
+            '     await AiSearch("my-search", {',
+            "       source: bucket,",
+            "       serviceApiToken: alchemy.secret.env.CLOUDFLARE_SERVICE_API_TOKEN,",
+            "     });",
+            "",
+            "   Alchemy will use this token directly instead of creating a new one.",
+            "   See: https://alchemy.run/concepts/cli/#util-create-cloudflare-token",
+            "",
+            "2. Or set CLOUDFLARE_API_TOKEN to a token with 'User API Tokens: Edit' permission:",
+            "   - Go to Cloudflare Dashboard → My Profile → API Tokens",
+            "   - Create or edit a token to include 'User API Tokens: Edit' permission",
+            "   - Set CLOUDFLARE_API_TOKEN environment variable with this token",
+            "   - Alchemy will then be able to create the service token automatically.",
           ].join("\n"),
           { cause: error },
         );
