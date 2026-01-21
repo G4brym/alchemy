@@ -4,10 +4,7 @@ import { Resource, ResourceKind } from "../resource.ts";
 import type { Secret } from "../secret.ts";
 import { CloudflareApiError } from "./api-error.ts";
 import { extractCloudflareResult } from "./api-response.ts";
-import {
-  createCloudflareApi,
-  type CloudflareApiOptions,
-} from "./api.ts";
+import { createCloudflareApi, type CloudflareApiOptions } from "./api.ts";
 
 /**
  * Permission group IDs required for AI Search
@@ -31,6 +28,12 @@ export interface AiSearchTokenProps extends CloudflareApiOptions {
    * @default false
    */
   adopt?: boolean;
+
+  /**
+   * Whether to delete the token when removed from Alchemy
+   * @default true
+   */
+  delete?: boolean;
 }
 
 /**
@@ -181,33 +184,35 @@ export const AiSearchToken = Resource(
     const tokenName = props.name ?? id;
 
     if (this.phase === "delete") {
-      // First delete the AI Search token registration
-      const aiSearchTokenId = this.output?.tokenId;
-      if (aiSearchTokenId) {
-        try {
-          const response = await api.delete(
-            `/accounts/${api.accountId}/ai-search/tokens/${aiSearchTokenId}`,
-          );
-          if (!response.ok && response.status !== 404) {
-            const errorText = await response.text();
-            console.error(`Failed to delete AI Search token: ${errorText}`);
+      if (props.delete !== false) {
+        // First delete the AI Search token registration
+        const aiSearchTokenId = this.output?.tokenId;
+        if (aiSearchTokenId) {
+          try {
+            const response = await api.delete(
+              `/accounts/${api.accountId}/ai-search/tokens/${aiSearchTokenId}`,
+            );
+            if (!response.ok && response.status !== 404) {
+              const errorText = await response.text();
+              console.error(`Failed to delete AI Search token: ${errorText}`);
+            }
+          } catch (error) {
+            console.error("Error deleting AI Search token:", error);
           }
-        } catch (error) {
-          console.error("Error deleting AI Search token:", error);
         }
-      }
 
-      // Delete the underlying user API token
-      const userApiTokenId = this.output?.userApiTokenId;
-      if (userApiTokenId) {
-        try {
-          const response = await api.delete(`/user/tokens/${userApiTokenId}`);
-          if (!response.ok && response.status !== 404) {
-            const errorText = await response.text();
-            console.error(`Failed to delete user API token: ${errorText}`);
+        // Delete the underlying user API token
+        const userApiTokenId = this.output?.userApiTokenId;
+        if (userApiTokenId) {
+          try {
+            const response = await api.delete(`/user/tokens/${userApiTokenId}`);
+            if (!response.ok && response.status !== 404) {
+              const errorText = await response.text();
+              console.error(`Failed to delete user API token: ${errorText}`);
+            }
+          } catch (error) {
+            console.error("Error deleting user API token:", error);
           }
-        } catch (error) {
-          console.error("Error deleting user API token:", error);
         }
       }
 

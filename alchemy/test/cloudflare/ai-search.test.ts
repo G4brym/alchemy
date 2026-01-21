@@ -283,7 +283,7 @@ describe("AiSearch Resource", () => {
     }
   });
 
-  test("AI Search with delete: false preserves instance", async (scope) => {
+  test("AI Search with delete false preserves instance", async (scope) => {
     const instanceName = `${testId}-nodelete`;
     const bucketName = `${testId}-nodelete-bucket`;
 
@@ -336,6 +336,7 @@ describe("AiSearch Resource", () => {
       const bucket = await R2Bucket("e2e-bucket", {
         name: bucketName,
         adopt: true,
+        empty: true, // Empty bucket on deletion since we upload docs
       });
 
       // Upload test documents to the bucket
@@ -450,8 +451,10 @@ Contact us at support@example.com or visit our forums.
       const data: any = await response.json();
 
       expect(data.success).toBe(true);
-      // Note: Results may vary based on indexing, but we verify the call succeeded
       expect(data.searchQuery).toBeTruthy();
+      // Verify AI Search actually found documents
+      expect(data.hasResults).toBe(true);
+      expect(data.resultCount).toBeGreaterThan(0);
     } finally {
       await destroy(scope);
     }
@@ -468,6 +471,9 @@ Contact us at support@example.com or visit our forums.
       const bucket = await R2Bucket("rag-bucket", {
         name: bucketName,
         adopt: true,
+        // we can't seem to delete a bucket used by AI search
+        delete: false,
+        // empty: true, // Empty bucket on deletion since we upload docs
       });
 
       await bucket.put(
@@ -496,18 +502,17 @@ Schedule regular vet checkups and keep vaccinations current.
           bucket,
         },
         adopt: true,
+        // we don't delete it because it's fucking slow as shit to spin up
+        delete: false,
       });
 
       expect(aiSearch.id).toEqual(instanceName);
 
       // 3. Wait for indexing
       await waitFor(
-        async () => {
-          const instance = await getAiSearchInstance(api, instanceName);
-          return instance.status;
-        },
+        async () => (await getAiSearchInstance(api, instanceName)).status,
         (status) => status === "ready",
-        { timeoutMs: 180_000, intervalMs: 10_000 },
+        { timeoutMs: 180_000, intervalMs: 1000 },
       );
 
       // 4. Create worker that uses aiSearch (RAG)
@@ -554,8 +559,10 @@ Schedule regular vet checkups and keep vaccinations current.
       const data: any = await response.json();
 
       expect(data.success).toBe(true);
-      // AI Search with RAG should generate a response
+      // AI Search with RAG should generate a response based on source documents
       expect(data.hasResponse).toBe(true);
+      expect(data.responseLength).toBeGreaterThan(0);
+      expect(data.sourceCount).toBeGreaterThan(0);
     } finally {
       await destroy(scope);
     }

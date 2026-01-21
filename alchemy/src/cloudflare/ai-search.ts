@@ -435,11 +435,11 @@ export const AiSearch = Resource(
         const token = await AiSearchToken(`${id}-token`, {
           name: tokenName,
           adopt: true,
+          delete: props.delete,
           apiToken: props.apiToken,
           accountId: props.accountId,
           baseUrl: props.baseUrl,
           profile: props.profile,
-          legacy: false,
         });
         tokenId = token.tokenId;
       } catch (error) {
@@ -489,13 +489,17 @@ export const AiSearch = Resource(
         );
       } catch (error) {
         // Handle adoption if instance already exists
-        if (
-          adopt &&
+        // Error code 7022: ai_search_with_this_name_already_exist
+        const isAlreadyExistsError =
           error instanceof CloudflareApiError &&
           (error.message.includes("already exists") ||
-            error.message.includes("duplicate"))
-        ) {
-          logger.log(`AI Search instance ${instanceName} already exists, adopting`);
+            error.message.includes("already_exist") ||
+            error.message.includes("duplicate") ||
+            error.errorData?.some?.((e: { code?: number }) => e.code === 7022));
+        if (adopt && isAlreadyExistsError) {
+          logger.log(
+            `AI Search instance ${instanceName} already exists, adopting`,
+          );
           result = await getAiSearchInstance(api, instanceName);
           // Update with new configuration
           result = await updateAiSearchInstance(
