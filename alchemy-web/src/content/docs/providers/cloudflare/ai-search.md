@@ -5,18 +5,9 @@ description: Learn how to create and configure Cloudflare AI Search instances fo
 
 The AiSearch resource lets you create and manage [Cloudflare AI Search](https://developers.cloudflare.com/ai-search/) instances (formerly AutoRAG). AI Search automatically indexes your data from R2 buckets or web crawlers, creates vector embeddings, and provides natural language search with AI-generated responses.
 
-## Prerequisites
-
-Before creating an AI Search instance, you need to create an AI Search token in the Cloudflare dashboard:
-
-1. Go to **Cloudflare Dashboard → AI Search**
-2. Navigate to the **Tokens** section  
-3. Create a new token with access to your R2 bucket
-4. Copy the token ID (UUID) for use in your configuration
-
 ## Minimal Example
 
-Create an AI Search instance backed by an R2 bucket:
+Create an AI Search instance backed by an R2 bucket. Alchemy automatically creates and manages the required service token:
 
 ```ts
 import { AiSearch, R2Bucket } from "alchemy/cloudflare";
@@ -27,7 +18,6 @@ const search = await AiSearch("docs-search", {
   source: {
     type: "r2",
     bucket,
-    token: process.env.CLOUDFLARE_AI_SEARCH_TOKEN_ID!,
   },
 });
 ```
@@ -45,7 +35,6 @@ const search = await AiSearch("custom-search", {
   source: {
     type: "r2",
     bucket,
-    token: process.env.CLOUDFLARE_AI_SEARCH_TOKEN_ID!,
   },
   aiModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
   embeddingModel: "@cf/baai/bge-m3",
@@ -68,7 +57,6 @@ const search = await AiSearch("advanced-search", {
   source: {
     type: "r2",
     bucket,
-    token: process.env.CLOUDFLARE_AI_SEARCH_TOKEN_ID!,
   },
   reranking: true,
   rerankingModel: "@cf/baai/bge-reranker-base",
@@ -90,7 +78,6 @@ const search = await AiSearch("docs-search", {
   source: {
     type: "r2",
     bucket,
-    token: process.env.CLOUDFLARE_AI_SEARCH_TOKEN_ID!,
   },
 });
 
@@ -162,7 +149,6 @@ const search = await AiSearch("web-search", {
   source: {
     type: "web-crawler",
     urls: ["https://docs.example.com"],
-    token: process.env.CLOUDFLARE_AI_SEARCH_TOKEN_ID!,
   },
 });
 ```
@@ -180,23 +166,22 @@ const search = await AiSearch("cached-search", {
   source: {
     type: "r2",
     bucket,
-    token: process.env.CLOUDFLARE_AI_SEARCH_TOKEN_ID!,
   },
   cache: true,
   cacheThreshold: 0.9, // Cache queries with 90%+ similarity
 });
 ```
 
-## Using an AiSearchToken Resource
+## Using an Explicit AiSearchToken
 
-You can also use the `AiSearchToken` resource if you want Alchemy to manage the token lifecycle:
+By default, `AiSearch` automatically creates a service token with the required permissions. If you need more control, you can create and manage the token explicitly:
 
 ```ts
 import { AiSearch, AiSearchToken, R2Bucket } from "alchemy/cloudflare";
 
 const bucket = await R2Bucket("docs", { name: "my-docs" });
 
-// Create a token resource
+// Create a token resource explicitly
 const token = await AiSearchToken("my-token", {
   name: "docs-search-token",
 });
@@ -205,12 +190,15 @@ const search = await AiSearch("docs-search", {
   source: {
     type: "r2",
     bucket,
-    token, // Use the token resource
+    token, // Use the explicit token
   },
 });
 ```
 
-> **Note**: The `AiSearchToken` resource attempts to create tokens programmatically, but this may not work with all authentication methods. If it fails, you'll receive a helpful error message with instructions on how to create the token manually in the Cloudflare dashboard.
+The `AiSearchToken` resource:
+1. Creates a user API token with "AI Search Index Engine" and "Workers R2 Storage Write" permissions
+2. Registers the token with the AI Search service
+3. Cleans up both tokens when destroyed
 
 ## Configuration Options
 
