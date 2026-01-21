@@ -461,7 +461,11 @@ export const AiSearch = Resource(
             "",
             `   source: {`,
             `     type: "${normalizedSource.type}",`,
-            `     ${normalizedSource.type === "r2" ? `bucket: ${sourceBucket},` : `urls: [...],`}`,
+            `     ${
+              normalizedSource.type === "r2"
+                ? `bucket: ${sourceBucket},`
+                : `urls: [...],`
+            }`,
             `     token: "your-token-id-here",`,
             `   }`,
             "",
