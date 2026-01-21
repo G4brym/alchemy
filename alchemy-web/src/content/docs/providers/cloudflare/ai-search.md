@@ -172,9 +172,19 @@ const search = await AiSearch("cached-search", {
 });
 ```
 
-## Using an Explicit AiSearchToken
+## Service Token
 
-By default, `AiSearch` automatically creates a service token with the required permissions. If you need more control, you can create and manage the token explicitly:
+`AiSearch` automatically creates and manages a service token with the required permissions. You don't need to pass any credentials or tokens — Alchemy handles this for you.
+
+The automatically created token has:
+- **AI Search Index Engine** permission
+- **Workers R2 Storage Write** permission
+
+When the AI Search instance is destroyed, the token is automatically cleaned up.
+
+### Using an Explicit Token
+
+If you need more control over the token lifecycle (e.g., sharing a token across multiple instances), you can create an [AiSearchToken](/providers/cloudflare/ai-search-token) explicitly:
 
 ```ts
 import { AiSearch, AiSearchToken, R2Bucket } from "alchemy/cloudflare";
@@ -195,10 +205,7 @@ const search = await AiSearch("docs-search", {
 });
 ```
 
-The `AiSearchToken` resource:
-1. Creates a user API token with "AI Search Index Engine" and "Workers R2 Storage Write" permissions
-2. Registers the token with the AI Search service
-3. Cleans up both tokens when destroyed
+See [AiSearchToken](/providers/cloudflare/ai-search-token) for more details.
 
 ## Configuration Options
 
