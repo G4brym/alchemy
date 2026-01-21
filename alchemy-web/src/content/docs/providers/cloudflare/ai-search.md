@@ -7,7 +7,7 @@ The AiSearch resource lets you create and manage [Cloudflare AI Search](https://
 
 ## Minimal Example
 
-Create an AI Search instance backed by an R2 bucket. Alchemy automatically creates and manages the required service token:
+Create an AI Search instance backed by an R2 bucket. Just pass the bucket directly as the source - Alchemy automatically creates and manages the required service token:
 
 ```ts
 import { AiSearch, R2Bucket } from "alchemy/cloudflare";
@@ -15,10 +15,7 @@ import { AiSearch, R2Bucket } from "alchemy/cloudflare";
 const bucket = await R2Bucket("docs", { name: "my-docs" });
 
 const search = await AiSearch("docs-search", {
-  source: {
-    type: "r2",
-    bucket,
-  },
+  source: bucket,
 });
 ```
 
@@ -32,11 +29,8 @@ import { AiSearch, R2Bucket } from "alchemy/cloudflare";
 const bucket = await R2Bucket("docs", { name: "my-docs" });
 
 const search = await AiSearch("custom-search", {
-  source: {
-    type: "r2",
-    bucket,
-  },
-  aiModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  source: bucket,
+  aiSearchModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
   embeddingModel: "@cf/baai/bge-m3",
   chunkSize: 512,
   chunkOverlap: 20,
@@ -54,10 +48,7 @@ import { AiSearch, R2Bucket } from "alchemy/cloudflare";
 const bucket = await R2Bucket("docs", { name: "my-docs" });
 
 const search = await AiSearch("advanced-search", {
-  source: {
-    type: "r2",
-    bucket,
-  },
+  source: bucket,
   reranking: true,
   rerankingModel: "@cf/baai/bge-reranker-base",
   rewriteQuery: true,
@@ -75,10 +66,7 @@ import { Worker, Ai, AiSearch, R2Bucket } from "alchemy/cloudflare";
 const bucket = await R2Bucket("docs", { name: "my-docs" });
 
 const search = await AiSearch("docs-search", {
-  source: {
-    type: "r2",
-    bucket,
-  },
+  source: bucket,
 });
 
 await Worker("api", {
@@ -163,10 +151,7 @@ import { AiSearch, R2Bucket } from "alchemy/cloudflare";
 const bucket = await R2Bucket("docs", { name: "my-docs" });
 
 const search = await AiSearch("cached-search", {
-  source: {
-    type: "r2",
-    bucket,
-  },
+  source: bucket,
   cache: true,
   cacheThreshold: 0.9, // Cache queries with 90%+ similarity
 });
@@ -212,8 +197,8 @@ See [AiSearchToken](/providers/cloudflare/ai-search-token) for more details.
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `name` | `string` | auto-generated | Instance name (1-32 characters) |
-| `source` | `AiSearchR2Source \| AiSearchWebCrawlerSource` | required | Data source configuration |
-| `aiModel` | `string` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Text generation model |
+| `source` | `R2Bucket \| AiSearchR2Source \| AiSearchWebCrawlerSource` | required | Data source (bucket or config) |
+| `aiSearchModel` | `string` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Text generation model |
 | `embeddingModel` | `string` | `@cf/baai/bge-m3` | Embedding model |
 | `chunk` | `boolean` | `true` | Enable document chunking |
 | `chunkSize` | `number` | `256` | Chunk size (minimum 64) |

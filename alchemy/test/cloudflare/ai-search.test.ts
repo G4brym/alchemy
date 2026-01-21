@@ -169,6 +169,34 @@ describe("AiSearch Resource", () => {
     }
   });
 
+  test("create AI Search with R2Bucket shorthand", async (scope) => {
+    const instanceName = `${testId}-shorthand`;
+    const bucketName = `${testId}-shorthand-bucket`;
+
+    let aiSearch: AiSearch | undefined;
+
+    try {
+      const bucket = await R2Bucket("shorthand-bucket", {
+        name: bucketName,
+        adopt: true,
+      });
+
+      // Use shorthand: pass R2Bucket directly as source
+      aiSearch = await AiSearch("shorthand-search", {
+        name: instanceName,
+        source: bucket, // Direct R2Bucket instead of { type: "r2", bucket }
+        adopt: true,
+      });
+
+      expect(aiSearch.id).toEqual(instanceName);
+      expect(aiSearch.sourceType).toEqual("r2");
+      expect(aiSearch.sourceBucket).toEqual(bucketName);
+      expect(aiSearch.tokenId).toBeTruthy();
+    } finally {
+      await destroy(scope);
+    }
+  });
+
   test("create AI Search with explicit token", async (scope) => {
     const instanceName = `${testId}-explicit`;
     const bucketName = `${testId}-explicit-bucket`;
@@ -333,10 +361,11 @@ describe("AiSearch Resource", () => {
 
     try {
       // 1. Create an R2 bucket with test documents
+      // Use delete: false because the bucket is used by AI Search
       const bucket = await R2Bucket("e2e-bucket", {
         name: bucketName,
         adopt: true,
-        empty: true, // Empty bucket on deletion since we upload docs
+        delete: false,
       });
 
       // Upload test documents to the bucket
@@ -379,6 +408,8 @@ Contact us at support@example.com or visit our forums.
       );
 
       // 2. Create AI Search instance backed by the R2 bucket
+      // Use delete: false because AI Search takes significant time to index documents
+      // This allows subsequent test runs to use an already-indexed instance
       const aiSearch = await AiSearch("e2e-search", {
         name: instanceName,
         source: {
@@ -386,6 +417,7 @@ Contact us at support@example.com or visit our forums.
           bucket,
         },
         adopt: true,
+        delete: false,
       });
 
       expect(aiSearch.id).toEqual(instanceName);
@@ -447,8 +479,21 @@ Contact us at support@example.com or visit our forums.
       await new Promise((resolve) => setTimeout(resolve, 2000));
 
       // 5. Query the worker and verify AI Search returns results
-      const response = await fetchAndExpectOK(`${worker.url}?q=installation`);
-      const data: any = await response.json();
+      // Retry for a longer time since indexing may still be propagating even after "ready" status
+      // First-time indexing can take several minutes
+      let data: any;
+      await waitFor(
+        async () => {
+          const response = await fetchAndExpectOK(
+            `${worker.url}?q=installation`,
+          );
+          data = await response.json();
+          console.log("AI Search response:", JSON.stringify(data, null, 2));
+          return data;
+        },
+        (result) => result.success && result.hasResults,
+        { timeoutMs: 120_000, intervalMs: 10_000 },
+      );
 
       expect(data.success).toBe(true);
       expect(data.searchQuery).toBeTruthy();

@@ -84,16 +84,17 @@ export interface AiSearchProps extends CloudflareApiOptions {
   name?: string;
 
   /**
-   * Data source for indexing
+   * Data source for indexing.
+   * Can be an R2Bucket directly, an R2 source config, or a web crawler config.
    */
-  source: AiSearchR2Source | AiSearchWebCrawlerSource;
+  source: R2Bucket | AiSearchR2Source | AiSearchWebCrawlerSource;
 
   /**
    * Text generation model for AI responses
    *
    * @default "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
    */
-  aiModel?: string;
+  aiSearchModel?: string;
 
   /**
    * Embedding model for vectorization
@@ -303,23 +304,17 @@ interface AiSearchApiResponse {
  *
  * @example
  * // Create an AI Search instance backed by an R2 bucket
- * // An AI Search token is automatically created
  * const bucket = await R2Bucket("docs", { name: "my-docs" });
  * const search = await AiSearch("docs-search", {
- *   source: {
- *     type: "r2",
- *     bucket,
- *   },
+ *   source: bucket,
  * });
  *
  * @example
- * // Create an AI Search instance with custom models and chunking
+ * // Create with custom models and chunking
+ * const bucket = await R2Bucket("docs", { name: "my-docs" });
  * const search = await AiSearch("custom-search", {
- *   source: {
- *     type: "r2",
- *     bucket: "my-bucket",
- *   },
- *   aiModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+ *   source: bucket,
+ *   aiSearchModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
  *   embeddingModel: "@cf/baai/bge-m3",
  *   chunkSize: 512,
  *   chunkOverlap: 20,
@@ -327,7 +322,7 @@ interface AiSearchApiResponse {
  * });
  *
  * @example
- * // Create an AI Search instance from a web crawler
+ * // Create from a web crawler
  * const search = await AiSearch("web-search", {
  *   source: {
  *     type: "web-crawler",
@@ -336,18 +331,23 @@ interface AiSearchApiResponse {
  * });
  *
  * @example
- * // Use an existing AI Search token
+ * // Use an existing AI Search token (advanced)
  * const token = await AiSearchToken("my-token");
+ * const bucket = await R2Bucket("docs", { name: "my-docs" });
  * const search = await AiSearch("docs-search", {
  *   source: {
  *     type: "r2",
- *     bucket: myBucket,
+ *     bucket,
  *     token,
  *   },
  * });
  *
  * @example
  * // Access AI Search from a Worker using the AI binding
+ * const bucket = await R2Bucket("docs", { name: "my-docs" });
+ * const search = await AiSearch("docs-search", {
+ *   source: bucket,
+ * });
  * await Worker("api", {
  *   bindings: { AI: Ai() },
  *   script: `
@@ -384,6 +384,12 @@ export const AiSearch = Resource(
 
     const adopt = props.adopt ?? this.scope.adopt;
 
+    // Normalize source: if R2Bucket is passed directly, wrap it as AiSearchR2Source
+    const normalizedSource: AiSearchR2Source | AiSearchWebCrawlerSource =
+      isBucket(props.source)
+        ? { type: "r2", bucket: props.source }
+        : props.source;
+
     if (this.phase === "delete") {
       if (props.delete !== false && this.output?.id) {
         await deleteAiSearchInstance(api, this.output.id);
@@ -399,23 +405,23 @@ export const AiSearch = Resource(
     // Check if source type changed - requires replacement
     if (
       this.phase === "update" &&
-      this.output?.sourceType !== props.source.type
+      this.output?.sourceType !== normalizedSource.type
     ) {
       return this.replace();
     }
 
     // Extract bucket name from source
     const sourceBucket =
-      props.source.type === "r2"
-        ? isBucket(props.source.bucket)
-          ? props.source.bucket.name
-          : props.source.bucket
+      normalizedSource.type === "r2"
+        ? isBucket(normalizedSource.bucket)
+          ? normalizedSource.bucket.name
+          : normalizedSource.bucket
         : undefined;
 
     // Check if source bucket changed - requires replacement
     if (
       this.phase === "update" &&
-      props.source.type === "r2" &&
+      normalizedSource.type === "r2" &&
       this.output?.sourceBucket !== sourceBucket
     ) {
       return this.replace();
@@ -423,11 +429,11 @@ export const AiSearch = Resource(
 
     // Get the AI Search token for accessing the data source
     let tokenId: string;
-    if (props.source.token) {
+    if (normalizedSource.token) {
       // Token provided - extract the ID
-      tokenId = isAiSearchToken(props.source.token)
-        ? props.source.token.tokenId
-        : props.source.token;
+      tokenId = isAiSearchToken(normalizedSource.token)
+        ? normalizedSource.token.tokenId
+        : normalizedSource.token;
     } else {
       // No token provided - try to create one automatically
       const tokenName = `${instanceName}-token`;
@@ -454,8 +460,8 @@ export const AiSearch = Resource(
             "3. Copy the token ID and provide it as source.token in your configuration:",
             "",
             `   source: {`,
-            `     type: "${props.source.type}",`,
-            `     ${props.source.type === "r2" ? `bucket: ${sourceBucket},` : `urls: [...],`}`,
+            `     type: "${normalizedSource.type}",`,
+            `     ${normalizedSource.type === "r2" ? `bucket: ${sourceBucket},` : `urls: [...],`}`,
             `     token: "your-token-id-here",`,
             `   }`,
             "",
@@ -484,6 +490,7 @@ export const AiSearch = Resource(
           api,
           instanceName,
           props,
+          normalizedSource,
           sourceBucket,
           tokenId,
         );
@@ -528,7 +535,7 @@ export const AiSearch = Resource(
       createdAt: result.created_at,
       modifiedAt: result.modified_at,
       accountId: result.account_id,
-      aiModel: result.ai_search_model,
+      aiSearchModel: result.ai_search_model,
       embeddingModel: result.embedding_model,
       chunk: result.chunk,
       chunkSize: result.chunk_size,
@@ -553,20 +560,21 @@ async function createAiSearchInstance(
   api: CloudflareApi,
   instanceName: string,
   props: AiSearchProps,
+  normalizedSource: AiSearchR2Source | AiSearchWebCrawlerSource,
   sourceBucket: string | undefined,
   tokenId: string,
 ): Promise<AiSearchApiResponse> {
   const formattedTokenId = formatAsUuid(tokenId);
   const body: Record<string, unknown> = {
     id: instanceName,
-    type: props.source.type,
+    type: normalizedSource.type,
     token_id: formattedTokenId,
-    source: sourceBucket ?? (props.source as AiSearchWebCrawlerSource).urls,
+    source: sourceBucket ?? (normalizedSource as AiSearchWebCrawlerSource).urls,
   };
 
   // Add optional configuration
-  if (props.aiModel !== undefined) {
-    body.ai_search_model = props.aiModel;
+  if (props.aiSearchModel !== undefined) {
+    body.ai_search_model = props.aiSearchModel;
   }
   if (props.embeddingModel !== undefined) {
     body.embedding_model = props.embeddingModel;
@@ -640,8 +648,8 @@ async function updateAiSearchInstance(
   const body: Record<string, unknown> = {};
 
   // Only include fields that can be updated
-  if (props.aiModel !== undefined) {
-    body.ai_search_model = props.aiModel;
+  if (props.aiSearchModel !== undefined) {
+    body.ai_search_model = props.aiSearchModel;
   }
   if (props.embeddingModel !== undefined) {
     body.embedding_model = props.embeddingModel;
