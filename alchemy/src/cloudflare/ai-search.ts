@@ -360,16 +360,20 @@ interface AiSearchApiResponse {
  *
  * @example
  * // Access AI Search from a Worker using the AI binding
+ * // Pass search.name as a binding since the instance name may be auto-generated
  * const bucket = await R2Bucket("docs", { name: "my-docs" });
  * const search = await AiSearch("docs-search", {
  *   source: bucket,
  * });
  * await Worker("api", {
- *   bindings: { AI: Ai() },
+ *   bindings: {
+ *     AI: Ai(),
+ *     RAG_NAME: search.name, // Pass the actual instance name
+ *   },
  *   script: `
  *     export default {
  *       async fetch(request, env) {
- *         const result = await env.AI.autorag("docs-search").aiSearch({
+ *         const result = await env.AI.autorag(env.RAG_NAME).aiSearch({
  *           query: "How do I get started?",
  *         });
  *         return Response.json(result);

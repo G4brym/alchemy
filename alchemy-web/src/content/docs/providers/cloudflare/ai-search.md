@@ -80,7 +80,7 @@ const search = await AiSearch("advanced-search", {
 
 ## Using AI Search from a Worker
 
-AI Search instances are accessed through the `AI` binding using `env.AI.autorag("instance-name")`:
+AI Search instances are accessed through the `AI` binding using `env.AI.autorag(name)`. Pass `search.name` as a binding so your worker knows the actual instance name (which may be auto-generated based on your app and stage):
 
 ```ts
 import { Worker, Ai, AiSearch, R2Bucket } from "alchemy/cloudflare";
@@ -95,6 +95,7 @@ await Worker("api", {
   entrypoint: "./src/worker.ts",
   bindings: {
     AI: Ai(), // AI binding required to access AI Search
+    RAG_NAME: search.name, // Pass the actual instance name
   },
 });
 ```
@@ -107,7 +108,7 @@ export default {
     const query = url.searchParams.get("q") || "";
 
     // Use search() for vector similarity search only
-    const searchResults = await env.AI.autorag("docs-search").search({
+    const searchResults = await env.AI.autorag(env.RAG_NAME).search({
       query,
       max_num_results: 10,
     });
@@ -118,6 +119,10 @@ export default {
   },
 };
 ```
+
+:::tip[Instance Naming]
+If you don't provide an explicit `name`, Alchemy generates one using `${app}-${stage}-${id}` (e.g., `myapp-dev-docs-search`). Always use `search.name` as a binding for portability across environments, or pass an explicit `name` if you need a predictable value.
+:::
 
 ## RAG Response Generation
 
@@ -130,7 +135,7 @@ export default {
     const { question } = await request.json();
 
     // Use aiSearch() for RAG - returns AI response + sources
-    const result = await env.AI.autorag("docs-search").aiSearch({
+    const result = await env.AI.autorag(env.RAG_NAME).aiSearch({
       query: question,
       model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
       max_num_results: 5,
