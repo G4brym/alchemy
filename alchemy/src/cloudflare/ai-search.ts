@@ -469,7 +469,7 @@ export const AiSearch = Resource(
             `     token: "your-token-id-here",`,
             `   }`,
             "",
-            "See https://developers.cloudflare.com/ai-search/usage/rest-api/ for more details.",
+            "See https://developers.cloudflare.com/ai-search/get-started/api/#2-create-a-service-api-token for more details.",
           ].join("\n"),
           { cause: error },
         );
