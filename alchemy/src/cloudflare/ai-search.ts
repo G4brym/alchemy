@@ -30,6 +30,25 @@ function formatAsUuid(hexString: string): string {
 }
 
 /**
+ * Validate that a domain string is a valid domain format (not a URL).
+ * Throws a helpful error if the input looks like a URL.
+ */
+function validateDomain(domain: string): void {
+  if (domain.includes("://")) {
+    throw new Error(
+      `Invalid domain format "${domain}". Provide just the domain (e.g., "docs.example.com"), not a URL. ` +
+        `For URL-based crawling, use AiCrawler instead of AiSearch.`,
+    );
+  }
+  if (domain.includes("/")) {
+    throw new Error(
+      `Invalid domain format "${domain}". Provide just the domain without paths (e.g., "docs.example.com"). ` +
+        `Use includePaths to filter specific paths, or use AiCrawler for URL-based crawling.`,
+    );
+  }
+}
+
+/**
  * Source configuration for R2 bucket-backed AI Search
  */
 export interface AiSearchR2Source {
@@ -61,9 +80,28 @@ export interface AiSearchWebCrawlerSource {
   type: "web-crawler";
 
   /**
-   * URLs to crawl
+   * Domain to crawl. Must be a domain that is onboarded to your Cloudflare account
+   * (added as a zone with active nameservers pointing to Cloudflare).
+   *
+   * Can be provided as just the domain (e.g., "docs.example.com") or with protocol
+   * (e.g., "https://docs.example.com") - the protocol will be stripped automatically.
+   *
+   * @example "docs.example.com"
+   * @example "https://example.com" // Protocol will be stripped
    */
-  urls: string[];
+  domain: string;
+
+  /**
+   * Path patterns to include in crawling (up to 10 patterns).
+   * Supports wildcards: `*` matches any characters except `/`, `**` matches any characters including `/`.
+   */
+  includePaths?: string[];
+
+  /**
+   * Path patterns to exclude from crawling (up to 10 patterns).
+   * Supports wildcards: `*` matches any characters except `/`, `**` matches any characters including `/`.
+   */
+  excludePaths?: string[];
 
   /**
    * API token for web crawler access.
@@ -259,6 +297,11 @@ export type AiSearch = Omit<AiSearchProps, "delete" | "adopt" | "source"> & {
   sourceBucket?: string;
 
   /**
+   * Source domain (for web-crawler sources)
+   */
+  sourceDomain?: string;
+
+  /**
    * AI Search token ID used for data source access
    */
   tokenId: string;
@@ -338,12 +381,10 @@ interface AiSearchApiResponse {
  * });
  *
  * @example
- * // Create from a web crawler
+ * // Create from a web crawler using the AiCrawler helper
+ * import { AiCrawler } from "alchemy/cloudflare";
  * const search = await AiSearch("web-search", {
- *   source: {
- *     type: "web-crawler",
- *     urls: ["https://docs.example.com"],
- *   },
+ *   source: AiCrawler(["https://docs.example.com"]),
  * });
  *
  * @example
@@ -430,7 +471,7 @@ export const AiSearch = Resource(
       return this.replace();
     }
 
-    // Extract bucket name from source
+    // Extract bucket name from source (for R2)
     const sourceBucket =
       normalizedSource.type === "r2"
         ? isBucket(normalizedSource.bucket)
@@ -438,11 +479,31 @@ export const AiSearch = Resource(
           : normalizedSource.bucket
         : undefined;
 
+    // Extract and validate domain from source (for web-crawler)
+    const sourceDomain =
+      normalizedSource.type === "web-crawler"
+        ? normalizedSource.domain
+        : undefined;
+
+    // Validate domain format for web-crawler
+    if (normalizedSource.type === "web-crawler") {
+      validateDomain(normalizedSource.domain);
+    }
+
     // Check if source bucket changed - requires replacement
     if (
       this.phase === "update" &&
       normalizedSource.type === "r2" &&
       this.output?.sourceBucket !== sourceBucket
+    ) {
+      return this.replace();
+    }
+
+    // Check if source domain changed - requires replacement
+    if (
+      this.phase === "update" &&
+      normalizedSource.type === "web-crawler" &&
+      this.output?.sourceDomain !== sourceDomain
     ) {
       return this.replace();
     }
@@ -563,6 +624,7 @@ export const AiSearch = Resource(
       vectorizeName: result.vectorize_name,
       sourceType: result.type,
       sourceBucket,
+      sourceDomain,
       tokenId,
       status: (result.status as AiSearch["status"]) ?? "waiting",
       createdAt: result.created_at,
@@ -598,12 +660,36 @@ async function createAiSearchInstance(
   tokenId: string,
 ): Promise<AiSearchApiResponse> {
   const formattedTokenId = formatAsUuid(tokenId);
+
+  // For web-crawler, use the domain directly (already validated)
+  const sourceValue =
+    normalizedSource.type === "r2"
+      ? sourceBucket
+      : (normalizedSource as AiSearchWebCrawlerSource).domain;
+
   const body: Record<string, unknown> = {
     id: instanceName,
     type: normalizedSource.type,
     token_id: formattedTokenId,
-    source: sourceBucket ?? (normalizedSource as AiSearchWebCrawlerSource).urls,
+    source: sourceValue,
   };
+
+  // Add source_params for path filtering (web-crawler only)
+  if (normalizedSource.type === "web-crawler") {
+    const webCrawlerSource = normalizedSource as AiSearchWebCrawlerSource;
+    const sourceParams: Record<string, unknown> = {};
+
+    if (webCrawlerSource.includePaths?.length) {
+      sourceParams.include_items = webCrawlerSource.includePaths;
+    }
+    if (webCrawlerSource.excludePaths?.length) {
+      sourceParams.exclude_items = webCrawlerSource.excludePaths;
+    }
+
+    if (Object.keys(sourceParams).length > 0) {
+      body.source_params = sourceParams;
+    }
+  }
 
   // Add optional configuration
   if (props.aiSearchModel !== undefined) {

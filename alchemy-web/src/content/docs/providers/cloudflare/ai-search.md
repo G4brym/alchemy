@@ -41,43 +41,6 @@ const search = await AiSearch("docs-search", {
 });
 ```
 
-## With Custom Models and Chunking
-
-Configure an AI Search instance with custom embedding and generation models:
-
-```ts
-import { AiSearch, R2Bucket } from "alchemy/cloudflare";
-
-const bucket = await R2Bucket("docs", { name: "my-docs" });
-
-const search = await AiSearch("custom-search", {
-  source: bucket,
-  aiSearchModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
-  embeddingModel: "@cf/baai/bge-m3",
-  chunkSize: 512,
-  chunkOverlap: 20,
-  maxNumResults: 15,
-});
-```
-
-## With Reranking and Query Rewriting
-
-Enable advanced retrieval features for better search results:
-
-```ts
-import { AiSearch, R2Bucket } from "alchemy/cloudflare";
-
-const bucket = await R2Bucket("docs", { name: "my-docs" });
-
-const search = await AiSearch("advanced-search", {
-  source: bucket,
-  reranking: true,
-  rerankingModel: "@cf/baai/bge-reranker-base",
-  rewriteQuery: true,
-  scoreThreshold: 0.3,
-});
-```
-
 ## Using AI Search from a Worker
 
 AI Search instances are accessed through the `AI` binding using `env.AI.autorag(name)`. Pass `search.name` as a binding so your worker knows the actual instance name (which may be auto-generated based on your app and stage):
@@ -153,17 +116,90 @@ export default {
 };
 ```
 
+## With Custom Models and Chunking
+
+Configure an AI Search instance with custom embedding and generation models:
+
+```ts
+import { AiSearch, R2Bucket } from "alchemy/cloudflare";
+
+const bucket = await R2Bucket("docs", { name: "my-docs" });
+
+const search = await AiSearch("custom-search", {
+  source: bucket,
+  aiSearchModel: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
+  embeddingModel: "@cf/baai/bge-m3",
+  chunkSize: 512,
+  chunkOverlap: 20,
+  maxNumResults: 15,
+});
+```
+
+## With Reranking and Query Rewriting
+
+Enable advanced retrieval features for better search results:
+
+```ts
+import { AiSearch, R2Bucket } from "alchemy/cloudflare";
+
+const bucket = await R2Bucket("docs", { name: "my-docs" });
+
+const search = await AiSearch("advanced-search", {
+  source: bucket,
+  reranking: true,
+  rerankingModel: "@cf/baai/bge-reranker-base",
+  rewriteQuery: true,
+  scoreThreshold: 0.3,
+});
+```
+
 ## Web Crawler Source
 
-Create an AI Search instance that crawls websites:
+For crawling websites, use the [`AiCrawler`](/providers/cloudflare/ai-crawler) helper to build the source configuration from URLs:
+
+```ts
+import { AiSearch, AiCrawler } from "alchemy/cloudflare";
+
+const search = await AiSearch("docs-search", {
+  source: AiCrawler(["https://docs.example.com"]),
+});
+```
+
+### Crawl Specific Paths
+
+Provide multiple URLs to crawl specific sections of a site:
+
+```ts
+import { AiSearch, AiCrawler } from "alchemy/cloudflare";
+
+const search = await AiSearch("blog-search", {
+  source: AiCrawler([
+    "https://example.com/blog",
+    "https://example.com/news",
+  ]),
+});
+```
+
+:::warning[Domain Requirements]
+The domain must be:
+- Added as a zone in your Cloudflare account
+- Have active nameservers pointing to Cloudflare
+- All URLs must be from the same domain
+:::
+
+### Low-Level Web Crawler Configuration
+
+For more control, configure the web-crawler source directly:
 
 ```ts
 import { AiSearch } from "alchemy/cloudflare";
 
-const search = await AiSearch("web-search", {
+const search = await AiSearch("docs-search", {
   source: {
     type: "web-crawler",
-    urls: ["https://docs.example.com"],
+    domain: "docs.example.com", // Just the domain, not a URL
+    includePaths: ["**/docs/**", "**/blog/**"],
+    excludePaths: ["**/api/**"],
   },
 });
 ```
