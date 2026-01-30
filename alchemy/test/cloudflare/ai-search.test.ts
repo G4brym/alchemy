@@ -169,6 +169,30 @@ describe("AiSearch Resource", () => {
     }
   });
 
+  test("create AI Search with invalid domain", async (scope) => {
+    const instanceName = `${testId}-invalid`;
+
+    let aiSearch: AiSearch | undefined;
+
+    try {
+      aiSearch = await AiSearch("invalid-search", {
+        name: instanceName,
+        source: {
+          type: "web-crawler",
+          domain: "invalid-domain.com",
+        },
+        adopt: true,
+      });
+    } catch (error) {
+      assert(error instanceof Error);
+      expect(error.message).toContain(
+        "The domain needs to belong to this account.",
+      );
+    } finally {
+      await destroy(scope);
+    }
+  });
+
   test("create AI Search with R2Bucket shorthand", async (scope) => {
     const instanceName = `${testId}-shorthand`;
     const bucketName = `${testId}-shorthand-bucket`;
