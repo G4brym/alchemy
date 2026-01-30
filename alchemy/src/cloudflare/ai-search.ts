@@ -33,7 +33,10 @@ function formatAsUuid(hexString: string): string {
  * Validate that a domain string is a valid domain format (not a URL).
  * Throws a helpful error if the input looks like a URL.
  */
-function validateDomain(domain: string): void {
+async function validateDomain(
+  api: CloudflareApi,
+  domain: string,
+): Promise<void> {
   if (domain.includes("://")) {
     throw new Error(
       `Invalid domain format "${domain}". Provide just the domain (e.g., "docs.example.com"), not a URL. ` +
@@ -46,6 +49,42 @@ function validateDomain(domain: string): void {
         `Use includePaths to filter specific paths, or use AiCrawler for URL-based crawling.`,
     );
   }
+
+  // The Cloudflare dashboard uses this undocumented endpoint to validate domains.
+  // If we don't validate here, the create request fails with a 500 error.
+  const response = await api.post(
+    `/accounts/${api.accountId}/ai-search/domains`,
+    {
+      domain,
+    },
+  );
+  // The error message is more like an error code. This mapping is from the Cloudflare dashboard.
+  const errorMap = {
+    not_a_valid_domain: "Not a valid domain.",
+    invalid_domain:
+      "Invalid domain. The domain needs to belong to this account.",
+    fail_to_find_domain_info: "Failed to find domain information.",
+    missing_sitemap: "Sitemap not found. Please check your robots.txt.",
+    domain_not_owned_by_user: "The domain needs to belong to this account.",
+    forbidden_robots_txt:
+      "Failed to fetch robots.txt: The file is inaccessible.",
+    forbidden_sitemap:
+      "Failed to fetch your sitemap: The file is inaccessible.",
+  };
+  const json = (await response.json()) as {
+    success: boolean;
+    errors: Array<{ code: number; message: string }>;
+  };
+  if (json.success) return;
+  throw new Error(
+    [
+      `Failed to validate domain "${domain}" (${response.status}):`,
+      ...json.errors.map(
+        (e) =>
+          `- [${e.code}] ${e.message in errorMap ? errorMap[e.message as keyof typeof errorMap] : e.message}`,
+      ),
+    ].join("\n"),
+  );
 }
 
 /**
@@ -487,7 +526,7 @@ export const AiSearch = Resource(
 
     // Validate domain format for web-crawler
     if (normalizedSource.type === "web-crawler") {
-      validateDomain(normalizedSource.domain);
+      await validateDomain(api, normalizedSource.domain);
     }
 
     // Check if source bucket changed - requires replacement
