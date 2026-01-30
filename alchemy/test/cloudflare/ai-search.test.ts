@@ -1,4 +1,4 @@
-import { describe, expect } from "vitest";
+import { assert, describe, expect } from "vitest";
 import { alchemy } from "../../src/alchemy.ts";
 import { AiSearchToken } from "../../src/cloudflare/ai-search-token.ts";
 import {
