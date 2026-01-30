@@ -81,8 +81,13 @@ async function validateDomain(
       `Failed to validate domain "${domain}" (${response.status}):`,
       ...json.errors.map(
         (e) =>
-          `- [${e.code}] ${e.message in errorMap ? errorMap[e.message as keyof typeof errorMap] : e.message}`,
+          `- [${e.code}] ${
+            e.message in errorMap
+              ? errorMap[e.message as keyof typeof errorMap]
+              : e.message
+          }`,
       ),
+      "Learn more: https://developers.cloudflare.com/ai-search/configuration/data-source/website/",
     ].join("\n"),
   );
 }
