@@ -2,16 +2,10 @@ import { alchemy } from "../alchemy.ts";
 import type { Context } from "../context.ts";
 import { Resource, ResourceKind } from "../resource.ts";
 import type { Secret } from "../secret.ts";
+import { AccountApiToken } from "./account-api-token.ts";
 import { CloudflareApiError } from "./api-error.ts";
 import { extractCloudflareResult } from "./api-response.ts";
 import { createCloudflareApi, type CloudflareApiOptions } from "./api.ts";
-
-/**
- * Permission group IDs required for AI Search
- * @see https://developers.cloudflare.com/ai-search/get-started/api/
- */
-const AI_SEARCH_INDEX_ENGINE_PERMISSION = "9e9b428a0bcd46fd80e580b46a69963c";
-const WORKERS_R2_STORAGE_WRITE_PERMISSION = "bf7481a1826f439697cb59a20b22293e";
 
 /**
  * Properties for creating an AI Search Token
@@ -34,21 +28,6 @@ export interface AiSearchTokenProps extends CloudflareApiOptions {
    * @default true
    */
   delete?: boolean;
-
-  /**
-   * A pre-created service API token that allows AI Search to access resources
-   * in your account on your behalf, such as R2, Vectorize, and Workers AI.
-   *
-   * If provided, Alchemy will use this token directly instead of creating a new one.
-   * The token must have the following permissions:
-   * - AI Search Index Engine
-   * - Workers R2 Storage Write
-   *
-   * You can create one using: `alchemy util create-cloudflare-token`
-   *
-   * See: https://alchemy.run/concepts/cli/#util-create-cloudflare-token
-   */
-  serviceApiToken?: Secret;
 }
 
 /**
@@ -67,9 +46,9 @@ export type AiSearchToken = {
   tokenId: string;
 
   /**
-   * The underlying user API token ID (for lifecycle management)
+   * The underlying account API token ID (for lifecycle management)
    */
-  userApiTokenId: string;
+  accountTokenId: string;
 
   /**
    * The account ID
@@ -113,19 +92,6 @@ export type AiSearchToken = {
 };
 
 /**
- * API response for user token creation
- * @internal
- */
-interface UserApiTokenResponse {
-  id: string;
-  name: string;
-  status: string;
-  issued_on: string;
-  modified_on: string;
-  value?: string;
-}
-
-/**
  * API response for AI Search token
  * @internal
  */
@@ -161,7 +127,7 @@ export function isAiSearchToken(resource: unknown): resource is AiSearchToken {
  * access to R2 buckets or other data sources for indexing.
  *
  * This resource automatically:
- * 1. Creates a dedicated user API token with AI Search Index Engine and R2 Storage Write permissions
+ * 1. Creates an account API token with AI Search Index Engine and R2 Storage Write permissions
  * 2. Registers that token with the AI Search service
  *
  * @example
@@ -198,10 +164,6 @@ export const AiSearchToken = Resource(
     const api = await createCloudflareApi(props);
     const tokenName = props.name ?? id;
 
-    // Track whether we created the user token (vs using a provided one)
-    // If we didn't create it, we shouldn't delete it
-    const usingProvidedToken = !!props.serviceApiToken;
-
     if (this.phase === "delete") {
       // First delete the AI Search token registration
       const aiSearchTokenId = this.output?.tokenId;
@@ -219,20 +181,8 @@ export const AiSearchToken = Resource(
         }
       }
 
-      // Only delete the underlying user API token if we created it
-      // (i.e., serviceApiToken was NOT provided)
-      const userApiTokenId = this.output?.userApiTokenId;
-      if (userApiTokenId && !usingProvidedToken) {
-        try {
-          const response = await api.delete(`/user/tokens/${userApiTokenId}`);
-          if (!response.ok && response.status !== 404) {
-            const errorText = await response.text();
-            console.error(`Failed to delete user API token: ${errorText}`);
-          }
-        } catch (error) {
-          console.error("Error deleting user API token:", error);
-        }
-      }
+      // The AccountApiToken will be cleaned up automatically by Alchemy's
+      // resource lifecycle management since it's a child resource
 
       return this.destroy();
     }
@@ -242,85 +192,35 @@ export const AiSearchToken = Resource(
       return this.output;
     }
 
-    let cfApiId: string;
-    let cfApiKey: string;
-    let userApiTokenId: string;
-
-    if (props.serviceApiToken) {
-      // Use the provided service API token directly
-      // Verify it to get the token ID
-      cfApiKey = props.serviceApiToken.unencrypted;
-
-      const serviceTokenApi = await createCloudflareApi({
-        ...props,
-        apiToken: props.serviceApiToken,
-      });
-
-      const verifyResponse = await serviceTokenApi.get("/user/tokens/verify");
-      if (!verifyResponse.ok) {
-        const errorData: any = await verifyResponse.json().catch(() => ({
-          errors: [{ message: verifyResponse.statusText }],
-        }));
-        throw new Error(
-          `Failed to verify service API token: ${
-            errorData.errors?.[0]?.message || verifyResponse.statusText
-          }. Ensure the token has AI Search Index Engine and Workers R2 Storage Write permissions.`,
-        );
-      }
-
-      const verifyResult: { result: { id: string; status: string } } =
-        await verifyResponse.json();
-      cfApiId = verifyResult.result.id;
-      userApiTokenId = cfApiId;
-    } else {
-      // Create a new user API token with AI Search + R2 permissions
-      // This must be a USER token (not account token) per Cloudflare docs
-      const userTokenPayload = {
-        name: `${tokenName} (AI Search Service Token)`,
-        policies: [
-          {
-            effect: "allow",
-            resources: {
-              [`com.cloudflare.api.account.${api.accountId}`]: "*",
-            },
-            permission_groups: [
-              { id: AI_SEARCH_INDEX_ENGINE_PERMISSION },
-              { id: WORKERS_R2_STORAGE_WRITE_PERMISSION },
-            ],
+    // Create an account API token with AI Search + R2 permissions
+    const accountToken = await AccountApiToken(`${id}-account-token`, {
+      name: `${tokenName} (AI Search Service Token)`,
+      policies: [
+        {
+          effect: "allow",
+          permissionGroups: [
+            "AI Search Index Engine",
+            "Workers R2 Storage Write",
+          ],
+          resources: {
+            "com.cloudflare.api.account": "*",
           },
-        ],
-      };
+        },
+      ],
+      apiToken: props.apiToken,
+      accountId: props.accountId,
+      baseUrl: props.baseUrl,
+      profile: props.profile,
+    });
 
-      const userTokenResponse = await api.post(
-        "/user/tokens",
-        userTokenPayload,
+    if (!accountToken.value) {
+      throw new Error(
+        "Failed to create account API token for AI Search - no token value returned",
       );
-
-      if (!userTokenResponse.ok) {
-        const errorData: any = await userTokenResponse.json().catch(() => ({
-          errors: [{ message: userTokenResponse.statusText }],
-        }));
-        throw new Error(
-          `Failed to create user API token for AI Search: ${
-            errorData.errors?.[0]?.message || userTokenResponse.statusText
-          }`,
-        );
-      }
-
-      const userTokenResult: { result: UserApiTokenResponse } =
-        await userTokenResponse.json();
-      const userToken = userTokenResult.result;
-
-      if (!userToken.value) {
-        throw new Error(
-          "Failed to create user API token for AI Search - no token value returned",
-        );
-      }
-
-      cfApiId = userToken.id;
-      cfApiKey = userToken.value;
-      userApiTokenId = userToken.id;
     }
+
+    const cfApiId = accountToken.id;
+    const cfApiKey = accountToken.value.unencrypted;
 
     // Register the token with AI Search
     try {
@@ -336,7 +236,7 @@ export const AiSearchToken = Resource(
       return {
         type: "ai_search_token" as const,
         tokenId: response.id,
-        userApiTokenId,
+        accountTokenId: accountToken.id,
         accountId: response.account_id,
         accountTag: response.account_tag,
         name: response.name,
@@ -347,16 +247,6 @@ export const AiSearchToken = Resource(
         modifiedAt: response.modified_at,
       };
     } catch (error) {
-      // If AI Search token registration failed, clean up the user token we created
-      // (only if we created it, not if it was provided)
-      if (!usingProvidedToken) {
-        try {
-          await api.delete(`/user/tokens/${userApiTokenId}`);
-        } catch (cleanupError) {
-          console.error("Failed to clean up user API token:", cleanupError);
-        }
-      }
-
       // Check if token already exists and we should adopt it
       if (error instanceof CloudflareApiError && props.adopt) {
         // List tokens and find by name
@@ -372,7 +262,7 @@ export const AiSearchToken = Resource(
             return {
               type: "ai_search_token" as const,
               tokenId: existing.id,
-              userApiTokenId,
+              accountTokenId: accountToken.id,
               accountId: existing.account_id,
               accountTag: existing.account_tag,
               name: existing.name,

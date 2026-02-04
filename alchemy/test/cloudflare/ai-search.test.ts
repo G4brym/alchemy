@@ -35,7 +35,7 @@ describe("AiSearchToken Resource", () => {
       });
 
       expect(token.tokenId).toBeTruthy();
-      expect(token.userApiTokenId).toBeTruthy();
+      expect(token.accountTokenId).toBeTruthy();
       expect(token.name).toEqual(testId);
       expect(token.type).toEqual("ai_search_token");
       expect(token.cfApiId).toBeTruthy();
@@ -378,7 +378,7 @@ describe("AiSearch Resource", () => {
   });
 
   // End-to-end test with Worker binding
-  test.skip("create AI Search and query via Worker binding", async (scope) => {
+  test("create AI Search and query via Worker binding", async (scope) => {
     const instanceName = `${testId}-e2e`;
     const bucketName = `${testId}-e2e-bucket`;
     const workerName = `${testId}-e2e-worker`;
@@ -531,7 +531,7 @@ Contact us at support@example.com or visit our forums.
   }, 300_000); // 5 minute timeout for indexing
 
   // Test aiSearch() with RAG response generation
-  test.skip("AI Search with RAG response generation via Worker", async (scope) => {
+  test("AI Search with RAG response generation via Worker", async (scope) => {
     const instanceName = `${testId}-rag`;
     const bucketName = `${testId}-rag-bucket`;
     const workerName = `${testId}-rag-worker`;

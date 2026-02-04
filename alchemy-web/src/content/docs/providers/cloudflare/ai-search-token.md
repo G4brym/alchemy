@@ -6,7 +6,7 @@ description: Learn how to create and manage Cloudflare AI Search service tokens 
 The AiSearchToken resource creates a service token for authenticating with [Cloudflare AI Search](https://developers.cloudflare.com/ai-search/). This token is required for AI Search to access your R2 buckets or other data sources.
 
 :::note
-In most cases, you don't need to create this resource directly. The [AiSearch](/providers/cloudflare/ai-search) resource automatically creates and manages a service token for you.
+In most cases, you don't need to create this resource directly. The [AiSearch](/providers/cloudflare/ai-search) resource automatically detects existing tokens or creates one for you.
 :::
 
 ## When to Use
@@ -79,46 +79,13 @@ const token = await AiSearchToken("existing-token", {
 
 When you create an `AiSearchToken`, Alchemy:
 
-1. Creates a **user API token** with the required permissions:
+1. Creates an **account API token** with the required permissions:
    - `AI Search Index Engine` — allows AI Search to index and query data
    - `Workers R2 Storage Write` — allows AI Search to read from R2 buckets
 2. Registers the token with the **AI Search service**
 3. Returns the token details including the `tokenId` and `cfApiKey`
 
-When the resource is destroyed, both the AI Search token registration and the underlying user API token are cleaned up.
-
-## Permission Requirements
-
-AI Search requires a [service API token](https://developers.cloudflare.com/ai-search/get-started/api/#2-create-a-service-api-token) to access resources in your account on your behalf, such as R2, Vectorize, and Workers AI.
-
-Creating an `AiSearchToken` requires API credentials with **"User API Tokens: Edit"** permission, since it needs to create a user API token under the hood.
-
-If your main credentials don't have this permission, you can provide a pre-created service API token via `serviceApiToken`. Alchemy will use this token directly instead of creating a new one.
-
-```bash
-# Create a service API token with the Alchemy CLI
-alchemy util create-cloudflare-token --god-token
-```
-
-The CLI will output a token value. Add it to your `.env` file:
-
-```bash
-CLOUDFLARE_SERVICE_API_TOKEN=your-token-value-here
-```
-
-Then use it when creating the token:
-
-```ts
-import { alchemy } from "alchemy";
-import { AiSearchToken } from "alchemy/cloudflare";
-
-const token = await AiSearchToken("search-token", {
-  name: "docs-search-token",
-  serviceApiToken: alchemy.secret.env.CLOUDFLARE_SERVICE_API_TOKEN,
-});
-```
-
-This allows your main credentials to remain restricted while providing AI Search with the access it needs.
+When the resource is destroyed, both the AI Search token registration and the underlying account API token are cleaned up.
 
 ## Configuration Options
 
@@ -127,14 +94,13 @@ This allows your main credentials to remain restricted while providing AI Search
 | `name` | `string` | resource ID | Name of the token |
 | `adopt` | `boolean` | `false` | Adopt an existing token with the same name |
 | `delete` | `boolean` | `true` | Delete the token when removed from Alchemy |
-| `serviceApiToken` | `Secret` | - | Pre-created token for AI Search; if provided, Alchemy uses it directly instead of creating one |
 
 ## Output Properties
 
 | Property | Type | Description |
 |----------|------|-------------|
 | `tokenId` | `string` | The AI Search token ID (UUID) |
-| `userApiTokenId` | `string` | The underlying user API token ID |
+| `accountTokenId` | `string` | The underlying account API token ID |
 | `accountId` | `string` | The Cloudflare account ID |
 | `accountTag` | `string` | The Cloudflare account tag |
 | `name` | `string` | Name of the token |

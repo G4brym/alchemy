@@ -5,31 +5,9 @@ description: Learn how to create and configure Cloudflare AI Search instances fo
 
 The AiSearch resource lets you create and manage [Cloudflare AI Search](https://developers.cloudflare.com/ai-search/) instances (formerly AutoRAG). AI Search automatically indexes your data from R2 buckets or web crawlers, creates vector embeddings, and provides natural language search with AI-generated responses.
 
-:::caution[Token Creation Permissions]
-AI Search requires a [service API token](https://developers.cloudflare.com/ai-search/get-started/api/#2-create-a-service-api-token) to access resources in your account. Alchemy can create this automatically, but only if your credentials have **"User API Tokens: Edit"** permission.
-
-If your credentials don't have this permission, provide a pre-created token via `serviceApiToken`:
-
-```ts
-import { alchemy } from "alchemy";
-import { AiSearch, R2Bucket } from "alchemy/cloudflare";
-
-const bucket = await R2Bucket("docs", { name: "my-docs" });
-
-const search = await AiSearch("docs-search", {
-  source: bucket,
-  serviceApiToken: alchemy.secret.env.CLOUDFLARE_SERVICE_API_TOKEN,
-});
-```
-
-Create a service API token using the CLI: `alchemy util create-cloudflare-token`
-
-See [Token Creation Permissions](#token-creation-permissions) for more details.
-:::
-
 ## Minimal Example
 
-Create an AI Search instance backed by an R2 bucket. Just pass the bucket directly as the source - Alchemy automatically creates and manages the required service token:
+Create an AI Search instance backed by an R2 bucket. Just pass the bucket directly as the source - Alchemy automatically handles service token management:
 
 ```ts
 import { AiSearch, R2Bucket } from "alchemy/cloudflare";
@@ -222,7 +200,11 @@ const search = await AiSearch("cached-search", {
 
 ## Service Token
 
-`AiSearch` automatically creates and manages a service token with the required permissions. You don't need to pass any credentials or tokens — Alchemy handles this for you.
+AI Search requires a service token with specific permissions to access resources in your account. Alchemy handles this automatically:
+
+1. **If tokens already exist**: Alchemy detects existing AI Search service tokens in your account and lets AI Search auto-select one. No new token is created.
+
+2. **If no tokens exist**: Alchemy creates an account API token with the required permissions and registers it with AI Search.
 
 The automatically created token has:
 - **AI Search Index Engine** permission
@@ -230,49 +212,11 @@ The automatically created token has:
 
 When the AI Search instance is destroyed, the token is automatically cleaned up.
 
-### Token Creation Permissions
+### Using an Explicit Token
 
-AI Search requires a [service API token](https://developers.cloudflare.com/ai-search/get-started/api/#2-create-a-service-api-token) to access resources in your account on your behalf, such as R2, Vectorize, and Workers AI.
-
-Creating this service token requires your API credentials to have **"User API Tokens: Edit"** permission. If your credentials don't have this permission (common in production environments with restricted access), you have two options:
-
-#### Option 1: Provide a Service API Token (Recommended)
-
-Create a token with the required permissions and pass it via `serviceApiToken`. Alchemy will use this token directly instead of creating a new one.
-
-```bash
-# Create a service API token using the Alchemy CLI
-alchemy util create-cloudflare-token --god-token
-```
-
-The CLI will output a token value. Add it to your `.env` file:
-
-```bash
-CLOUDFLARE_SERVICE_API_TOKEN=your-token-value-here
-```
-
-Then use it in your configuration:
+For advanced use cases (e.g., sharing a token across multiple instances), you can create an [AiSearchToken](/providers/cloudflare/ai-search-token) explicitly:
 
 ```ts
-import { alchemy } from "alchemy";
-import { AiSearch, R2Bucket } from "alchemy/cloudflare";
-
-const bucket = await R2Bucket("docs", { name: "my-docs" });
-
-const search = await AiSearch("docs-search", {
-  source: bucket,
-  serviceApiToken: alchemy.secret.env.CLOUDFLARE_SERVICE_API_TOKEN,
-});
-```
-
-This keeps your main credentials restricted while providing AI Search with the access it needs.
-
-#### Option 2: Use an Explicit Token
-
-Create an [AiSearchToken](/providers/cloudflare/ai-search-token) explicitly and pass it to `AiSearch`:
-
-```ts
-import { alchemy } from "alchemy";
 import { AiSearch, AiSearchToken, R2Bucket } from "alchemy/cloudflare";
 
 const bucket = await R2Bucket("docs", { name: "my-docs" });
@@ -280,7 +224,6 @@ const bucket = await R2Bucket("docs", { name: "my-docs" });
 // Create a token resource explicitly
 const token = await AiSearchToken("my-token", {
   name: "docs-search-token",
-  serviceApiToken: alchemy.secret.env.CLOUDFLARE_SERVICE_API_TOKEN,
 });
 
 const search = await AiSearch("docs-search", {
@@ -313,4 +256,3 @@ See [AiSearchToken](/providers/cloudflare/ai-search-token) for more details.
 | `cache` | `boolean` | `false` | Enable similarity caching |
 | `delete` | `boolean` | `true` | Delete instance on removal |
 | `adopt` | `boolean` | `false` | Adopt existing instance |
-| `serviceApiToken` | `Secret` | - | Pre-created token for AI Search to access resources; if provided, Alchemy uses it directly |

@@ -1,6 +1,5 @@
 import type { Context } from "../context.ts";
 import { Resource, ResourceKind } from "../resource.ts";
-import type { Secret } from "../secret.ts";
 import { logger } from "../util/logger.ts";
 import {
   AiSearchToken,
@@ -109,7 +108,7 @@ export interface AiSearchR2Source {
   /**
    * API token for R2 access.
    * Can be a token ID string or an AiSearchToken resource.
-   * If not provided, an AI Search token will be automatically created.
+   * If not provided, AI Search will use an existing token or create one automatically.
    */
   token?: string | AiSearchTokenType;
 }
@@ -150,7 +149,7 @@ export interface AiSearchWebCrawlerSource {
   /**
    * API token for web crawler access.
    * Can be a token ID string or an AiSearchToken resource.
-   * If not provided, an AI Search token will be automatically created.
+   * If not provided, AI Search will use an existing token or create one automatically.
    */
   token?: string | AiSearchTokenType;
 }
@@ -277,21 +276,6 @@ export interface AiSearchProps extends CloudflareApiOptions {
    * @default false
    */
   adopt?: boolean;
-
-  /**
-   * A pre-created service API token that allows AI Search to access resources
-   * in your account on your behalf, such as R2, Vectorize, and Workers AI.
-   *
-   * If provided, Alchemy will use this token directly instead of creating a new one.
-   * The token must have the following permissions:
-   * - AI Search Index Engine
-   * - Workers R2 Storage Write
-   *
-   * You can create one using: `alchemy util create-cloudflare-token`
-   *
-   * See: https://alchemy.run/concepts/cli/#util-create-cloudflare-token
-   */
-  serviceApiToken?: Secret;
 }
 
 /**
@@ -396,6 +380,34 @@ interface AiSearchApiResponse {
   score_threshold?: number;
   status?: string;
   metadata?: Record<string, unknown>;
+}
+
+/**
+ * API response for AI Search token listing
+ * @internal
+ */
+interface AiSearchTokenListResponse {
+  id: string;
+  name: string;
+  enabled: boolean;
+  created_at: string;
+  modified_at: string;
+}
+
+/**
+ * List all AI Search tokens in an account
+ */
+async function listAiSearchTokens(
+  api: CloudflareApi,
+): Promise<AiSearchTokenListResponse[]> {
+  const response = await api.get(`/accounts/${api.accountId}/ai-search/tokens`);
+  if (!response.ok) {
+    return [];
+  }
+  const data = (await response.json()) as {
+    result: AiSearchTokenListResponse[];
+  };
+  return data.result || [];
 }
 
 /**
@@ -553,60 +565,39 @@ export const AiSearch = Resource(
     }
 
     // Get the AI Search token for accessing the data source
-    let tokenId: string;
+    let tokenId: string | undefined;
+
     if (normalizedSource.token) {
-      // Token provided - extract the ID
+      // User explicitly provided a token - use it
       tokenId = isAiSearchToken(normalizedSource.token)
         ? normalizedSource.token.tokenId
         : normalizedSource.token;
     } else {
-      // No token provided - try to create one automatically
-      const tokenName = `${instanceName}-token`;
-      try {
+      // Check if any valid AI Search tokens already exist
+      const existingTokens = await listAiSearchTokens(api);
+      const validToken = existingTokens.find((t) => t.enabled);
+
+      if (validToken) {
+        // Valid token exists - don't pass token_id, AI Search will auto-pick
+        logger.log(
+          `Found existing AI Search token "${validToken.name}", will let AI Search auto-select`,
+        );
+        tokenId = undefined;
+      } else {
+        // No valid token exists - create one
+        logger.log(
+          `No existing AI Search tokens found, creating new token for "${instanceName}"`,
+        );
         const token = await AiSearchToken(`${id}-token`, {
-          name: tokenName,
+          name: `${instanceName}-token`,
           adopt: true,
           delete: props.delete,
           apiToken: props.apiToken,
           accountId: props.accountId,
           baseUrl: props.baseUrl,
           profile: props.profile,
-          serviceApiToken: props.serviceApiToken,
         });
         tokenId = token.tokenId;
-      } catch (error) {
-        // If automatic token creation fails, provide helpful instructions
-        throw new Error(
-          [
-            `Failed to automatically create AI Search token for "${id}".`,
-            "",
-            "AI Search requires a service API token to access resources in your account on your behalf,",
-            "such as R2, Vectorize, and Workers AI. Creating this token automatically requires credentials",
-            "with 'User API Tokens: Edit' permission.",
-            "",
-            "To fix this, either:",
-            "",
-            "1. Provide a pre-created service API token via the serviceApiToken option (recommended):",
-            "   - Create one: alchemy util create-cloudflare-token",
-            "   - Add the output to your .env: CLOUDFLARE_SERVICE_API_TOKEN=your-token-here",
-            "   - Pass it to your AiSearch resource:",
-            "",
-            '     await AiSearch("my-search", {',
-            "       source: bucket,",
-            "       serviceApiToken: alchemy.secret.env.CLOUDFLARE_SERVICE_API_TOKEN,",
-            "     });",
-            "",
-            "   Alchemy will use this token directly instead of creating a new one.",
-            "   See: https://alchemy.run/concepts/cli/#util-create-cloudflare-token",
-            "",
-            "2. Or set CLOUDFLARE_API_TOKEN to a token with 'User API Tokens: Edit' permission:",
-            "   - Go to Cloudflare Dashboard → My Profile → API Tokens",
-            "   - Create or edit a token to include 'User API Tokens: Edit' permission",
-            "   - Set CLOUDFLARE_API_TOKEN environment variable with this token",
-            "   - Alchemy will then be able to create the service token automatically.",
-          ].join("\n"),
-          { cause: error },
-        );
       }
     }
 
@@ -614,13 +605,7 @@ export const AiSearch = Resource(
 
     if (this.phase === "update" && this.output?.id) {
       // Update existing instance
-      result = await updateAiSearchInstance(
-        api,
-        instanceName,
-        props,
-        sourceBucket,
-        tokenId,
-      );
+      result = await updateAiSearchInstance(api, instanceName, props);
     } else {
       // Create new instance
       try {
@@ -647,13 +632,7 @@ export const AiSearch = Resource(
           );
           result = await getAiSearchInstance(api, instanceName);
           // Update with new configuration
-          result = await updateAiSearchInstance(
-            api,
-            instanceName,
-            props,
-            sourceBucket,
-            tokenId,
-          );
+          result = await updateAiSearchInstance(api, instanceName, props);
         } else {
           throw error;
         }
@@ -669,7 +648,7 @@ export const AiSearch = Resource(
       sourceType: result.type,
       sourceBucket,
       sourceDomain,
-      tokenId,
+      tokenId: tokenId ?? result.token_id, // Use from response if we didn't pass one
       status: (result.status as AiSearch["status"]) ?? "waiting",
       createdAt: result.created_at,
       modifiedAt: result.modified_at,
@@ -701,10 +680,8 @@ async function createAiSearchInstance(
   props: AiSearchProps,
   normalizedSource: AiSearchR2Source | AiSearchWebCrawlerSource,
   sourceBucket: string | undefined,
-  tokenId: string,
+  tokenId: string | undefined,
 ): Promise<AiSearchApiResponse> {
-  const formattedTokenId = formatAsUuid(tokenId);
-
   // For web-crawler, use the domain directly (already validated)
   const sourceValue =
     normalizedSource.type === "r2"
@@ -714,9 +691,13 @@ async function createAiSearchInstance(
   const body: Record<string, unknown> = {
     id: instanceName,
     type: normalizedSource.type,
-    token_id: formattedTokenId,
     source: sourceValue,
   };
+
+  // Only include token_id if we have one (AI Search will auto-pick if omitted)
+  if (tokenId) {
+    body.token_id = formatAsUuid(tokenId);
+  }
 
   // Add source_params for path filtering (web-crawler only)
   if (normalizedSource.type === "web-crawler") {
@@ -805,8 +786,6 @@ async function updateAiSearchInstance(
   api: CloudflareApi,
   instanceName: string,
   props: AiSearchProps,
-  _sourceBucket: string | undefined,
-  _tokenId: string,
 ): Promise<AiSearchApiResponse> {
   const body: Record<string, unknown> = {};
 
