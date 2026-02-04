@@ -75,8 +75,9 @@ export namespace CloudflareAuth {
     "queues:write": "See and change Cloudflare Queues settings and data",
     "r2_catalog:write": "Grants write level access to R2 Data Catalog",
     "radar:read": "Grants access to read Cloudflare Radar data",
-    "rag:read": "Grants read level access to Auto Rag",
-    "rag:write": "Grants write level access to Auto Rag",
+    "ai-search:read": "Grants read level access to AI Search",
+    "ai-search:write": "Grants write level access to AI Search",
+    "ai-search:run": "Grants run level access to AI Search",
     "secrets_store:read": "Grants read level access to Secrets Store",
     "secrets_store:write": "Grants write level access to Secrets Store",
     "ssl_certs:write":
@@ -138,6 +139,7 @@ export namespace CloudflareAuth {
     "cloudchamber:write",
     "vectorize:write",
     "connectivity:admin",
+    "ai-search:write",
   ];
 
   /**
