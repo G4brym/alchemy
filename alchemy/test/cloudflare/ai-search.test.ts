@@ -528,7 +528,7 @@ Contact us at support@example.com or visit our forums.
     } finally {
       await destroy(scope);
     }
-  }, 300_000); // 5 minute timeout for indexing
+  }); // 5 minute timeout for indexing
 
   // Test aiSearch() with RAG response generation
   test("AI Search with RAG response generation via Worker", async (scope) => {
@@ -638,5 +638,5 @@ Schedule regular vet checkups and keep vaccinations current.
     } finally {
       await destroy(scope);
     }
-  }, 300_000); // 5 minute timeout
+  }); // 5 minute timeout
 });

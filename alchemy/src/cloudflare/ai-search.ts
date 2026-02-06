@@ -574,31 +574,31 @@ export const AiSearch = Resource(
         : normalizedSource.token;
     } else {
       // Check if any valid AI Search tokens already exist
-      const existingTokens = await listAiSearchTokens(api);
-      const validToken = existingTokens.find((t) => t.enabled);
+      // const existingTokens = await listAiSearchTokens(api);
+      // const validToken = existingTokens.find((t) => t.enabled);
 
-      if (validToken) {
-        // Valid token exists - don't pass token_id, AI Search will auto-pick
-        logger.log(
-          `Found existing AI Search token "${validToken.name}", will let AI Search auto-select`,
-        );
-        tokenId = undefined;
-      } else {
-        // No valid token exists - create one
-        logger.log(
-          `No existing AI Search tokens found, creating new token for "${instanceName}"`,
-        );
-        const token = await AiSearchToken(`${id}-token`, {
-          name: `${instanceName}-token`,
-          adopt: true,
-          delete: props.delete,
-          apiToken: props.apiToken,
-          accountId: props.accountId,
-          baseUrl: props.baseUrl,
-          profile: props.profile,
-        });
-        tokenId = token.tokenId;
-      }
+      // if (validToken) {
+      //   // Valid token exists - don't pass token_id, AI Search will auto-pick
+      //   logger.log(
+      //     `Found existing AI Search token "${validToken.name}", will let AI Search auto-select`,
+      //   );
+      //   tokenId = undefined;
+      // } else {
+      //   // No valid token exists - create one
+      //   logger.log(
+      //     `No existing AI Search tokens found, creating new token for "${instanceName}"`,
+      //   );
+      // }
+      const token = await AiSearchToken(`${id}-token`, {
+        name: `${instanceName}-token`,
+        adopt: true,
+        delete: props.delete,
+        apiToken: props.apiToken,
+        accountId: props.accountId,
+        baseUrl: props.baseUrl,
+        profile: props.profile,
+      });
+      tokenId = token.tokenId;
     }
 
     let result: AiSearchApiResponse;
