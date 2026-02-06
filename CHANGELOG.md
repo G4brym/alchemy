@@ -1,3 +1,34 @@
+## v0.83.3
+
+### &nbsp;&nbsp;&nbsp;🐞 Bug Fixes
+
+- **cloudflare**: Update writeMiniflareResponseToNode() to handle multiple `set-cookie` headers &nbsp;-&nbsp; by **Samson** and **John Royal** in https://github.com/alchemy-run/alchemy/issues/1314 [<samp>(312bd)</samp>](https://github.com/alchemy-run/alchemy/commit/312bd0b8)
+
+##### &nbsp;&nbsp;&nbsp;&nbsp;[View changes on GitHub](https://github.com/alchemy-run/alchemy/compare/v0.83.2...v0.83.3)
+
+---
+
+## v0.83.2
+
+### &nbsp;&nbsp;&nbsp;🚀 Features
+
+- **cli**: Support --erase-secrets with --force to workaround encrhyption bugs &nbsp;-&nbsp; by **Sam Goodwin** in https://github.com/alchemy-run/alchemy/issues/1300 [<samp>(dc655)</samp>](https://github.com/alchemy-run/alchemy/commit/dc655423)
+- **cloudflare**: Add placement hints for Workers (region, host, hostname) &nbsp;-&nbsp; by **Jan Henning** and **John Royal** in https://github.com/alchemy-run/alchemy/issues/1310 [<samp>(1dbc1)</samp>](https://github.com/alchemy-run/alchemy/commit/1dbc149a)
+
+### &nbsp;&nbsp;&nbsp;🐞 Bug Fixes
+
+- **cli**:
+  - Correct destroy command description &nbsp;-&nbsp; by **Edwin Tantawi** in https://github.com/alchemy-run/alchemy/issues/1299 [<samp>(853fc)</samp>](https://github.com/alchemy-run/alchemy/commit/853fc0fc)
+- **cloudflare**:
+  - Improve error messages for LogPushJob &nbsp;-&nbsp; by **John Royal** in https://github.com/alchemy-run/alchemy/issues/1301 [<samp>(eca68)</samp>](https://github.com/alchemy-run/alchemy/commit/eca68eb3)
+  - Ignore .alchemy directory in astro integration &nbsp;-&nbsp; by **John Royal** in https://github.com/alchemy-run/alchemy/issues/1308 [<samp>(57d35)</samp>](https://github.com/alchemy-run/alchemy/commit/57d3501b)
+  - Reflect actual queue consumer defaults in jsdoc &nbsp;-&nbsp; by **Sergey Bekrin** in https://github.com/alchemy-run/alchemy/issues/1302 [<samp>(9027b)</samp>](https://github.com/alchemy-run/alchemy/commit/9027b9a8)
+  - Use hashed paths for wasm imports to fix next.js deploy &nbsp;-&nbsp; by **John Royal** in https://github.com/alchemy-run/alchemy/issues/1313 [<samp>(be6e7)</samp>](https://github.com/alchemy-run/alchemy/commit/be6e7047)
+
+##### &nbsp;&nbsp;&nbsp;&nbsp;[View changes on GitHub](https://github.com/alchemy-run/alchemy/compare/v0.83.1...v0.83.2)
+
+---
+
 ## v0.83.1
 
 ### &nbsp;&nbsp;&nbsp;🚀 Features
