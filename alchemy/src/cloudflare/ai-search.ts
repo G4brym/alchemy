@@ -1,11 +1,8 @@
 import type { Context } from "../context.ts";
 import { Resource, ResourceKind } from "../resource.ts";
 import { logger } from "../util/logger.ts";
-import {
-  AiSearchToken,
-  isAiSearchToken,
-  type AiSearchToken as AiSearchTokenType,
-} from "./ai-search-token.ts";
+import { poll } from "../util/poll.ts";
+import { AiSearchToken, isAiSearchToken } from "./ai-search-token.ts";
 import { CloudflareApiError } from "./api-error.ts";
 import { extractCloudflareResult } from "./api-response.ts";
 import {
@@ -14,6 +11,7 @@ import {
   type CloudflareApiOptions,
 } from "./api.ts";
 import { isBucket, type R2Bucket } from "./bucket.ts";
+import { deleteIndex } from "./vectorize-index.ts";
 
 /**
  * Convert a 32-character hex string to UUID format
@@ -110,7 +108,7 @@ export interface AiSearchR2Source {
    * Can be a token ID string or an AiSearchToken resource.
    * If not provided, AI Search will use an existing token or create one automatically.
    */
-  token?: string | AiSearchTokenType;
+  token?: string | AiSearchToken;
 }
 
 /**
@@ -151,7 +149,7 @@ export interface AiSearchWebCrawlerSource {
    * Can be a token ID string or an AiSearchToken resource.
    * If not provided, AI Search will use an existing token or create one automatically.
    */
-  token?: string | AiSearchTokenType;
+  token?: string | AiSearchToken;
 }
 
 /**
@@ -383,34 +381,6 @@ interface AiSearchApiResponse {
 }
 
 /**
- * API response for AI Search token listing
- * @internal
- */
-interface AiSearchTokenListResponse {
-  id: string;
-  name: string;
-  enabled: boolean;
-  created_at: string;
-  modified_at: string;
-}
-
-/**
- * List all AI Search tokens in an account
- */
-async function listAiSearchTokens(
-  api: CloudflareApi,
-): Promise<AiSearchTokenListResponse[]> {
-  const response = await api.get(`/accounts/${api.accountId}/ai-search/tokens`);
-  if (!response.ok) {
-    return [];
-  }
-  const data = (await response.json()) as {
-    result: AiSearchTokenListResponse[];
-  };
-  return data.result || [];
-}
-
-/**
  * Creates and manages Cloudflare AI Search instances for RAG-powered search.
  *
  * AI Search (formerly AutoRAG) automatically indexes your data from R2 buckets or
@@ -490,25 +460,39 @@ export const AiSearch = Resource(
   ): Promise<AiSearch> {
     const api = await createCloudflareApi(props);
     const instanceName =
-      props.name ?? this.output?.name ?? this.scope.createPhysicalName(id);
+      props.name ??
+      this.output?.name ??
+      this.scope.createPhysicalName(id, "-", 32);
 
     // Validate name length
     if (instanceName.length < 1 || instanceName.length > 32) {
       throw new Error(
-        `AI Search instance name must be 1-32 characters, got ${instanceName.length}`,
+        `AI Search instance name must be 1-32 characters, got ${instanceName.length} ("${instanceName}")`,
       );
     }
 
     const adopt = props.adopt ?? this.scope.adopt;
 
     // Normalize source: if R2Bucket is passed directly, wrap it as AiSearchR2Source
-    const normalizedSource: AiSearchR2Source | AiSearchWebCrawlerSource =
-      isBucket(props.source)
-        ? { type: "r2", bucket: props.source }
-        : props.source;
+    let normalizedSource: AiSearchR2Source | AiSearchWebCrawlerSource;
+
+    if (isBucket(props.source)) {
+      if (this.scope.local && !props.source.dev.remote) {
+        throw new Error(
+          [
+            `AI Search "${id}" depends on an R2Bucket that is running locally, but AI Search requires the bucket to be deployed.`,
+            "Add `dev: { remote: true }` to the R2Bucket to use it with AI Search.",
+          ].join("\n"),
+        );
+      }
+      normalizedSource = { type: "r2", bucket: props.source };
+    } else {
+      normalizedSource = props.source;
+    }
 
     if (this.phase === "delete") {
       if (props.delete !== false && this.output?.id) {
+        await deleteIndex(api, this.output.vectorizeName);
         await deleteAiSearchInstance(api, this.output.id);
       }
       return this.destroy();
@@ -565,7 +549,7 @@ export const AiSearch = Resource(
     }
 
     // Get the AI Search token for accessing the data source
-    let tokenId: string | undefined;
+    let tokenId: string;
 
     if (normalizedSource.token) {
       // User explicitly provided a token - use it
@@ -573,30 +557,15 @@ export const AiSearch = Resource(
         ? normalizedSource.token.tokenId
         : normalizedSource.token;
     } else {
-      // Check if any valid AI Search tokens already exist
-      // const existingTokens = await listAiSearchTokens(api);
-      // const validToken = existingTokens.find((t) => t.enabled);
-
-      // if (validToken) {
-      //   // Valid token exists - don't pass token_id, AI Search will auto-pick
-      //   logger.log(
-      //     `Found existing AI Search token "${validToken.name}", will let AI Search auto-select`,
-      //   );
-      //   tokenId = undefined;
-      // } else {
-      //   // No valid token exists - create one
-      //   logger.log(
-      //     `No existing AI Search tokens found, creating new token for "${instanceName}"`,
-      //   );
-      // }
-      const token = await AiSearchToken(`${id}-token`, {
-        name: `${instanceName}-token`,
-        adopt: true,
+      const token = await AiSearchToken("token", {
+        adopt: props.adopt,
         delete: props.delete,
-        apiToken: props.apiToken,
-        accountId: props.accountId,
         baseUrl: props.baseUrl,
         profile: props.profile,
+        apiKey: props.apiKey,
+        apiToken: props.apiToken,
+        accountId: props.accountId,
+        email: props.email,
       });
       tokenId = token.tokenId;
     }
@@ -648,7 +617,7 @@ export const AiSearch = Resource(
       sourceType: result.type,
       sourceBucket,
       sourceDomain,
-      tokenId: tokenId ?? result.token_id, // Use from response if we didn't pass one
+      tokenId: result.token_id,
       status: (result.status as AiSearch["status"]) ?? "waiting",
       createdAt: result.created_at,
       modifiedAt: result.modified_at,
@@ -875,4 +844,66 @@ export async function listAiSearchInstances(
     "list AI Search instances",
     api.get(`/accounts/${api.accountId}/ai-search/instances`),
   );
+}
+
+interface AiSearchJobApiResponse {
+  id: string;
+  source: "user" | "schedule";
+  end_reason: string | null;
+  ended_at: string | null;
+  last_seen_at: string | null;
+  started_at: string | null;
+}
+
+export async function listAiSearchJobs(
+  api: CloudflareApi,
+  aiSearchId: string,
+): Promise<AiSearchJobApiResponse[]> {
+  return extractCloudflareResult<AiSearchJobApiResponse[]>(
+    `list AI Search jobs for instance "${aiSearchId}"`,
+    api.get(
+      `/accounts/${api.accountId}/ai-search/instances/${aiSearchId}/jobs`,
+    ),
+  );
+}
+
+export async function getAiSearchJob(
+  api: CloudflareApi,
+  aiSearchId: string,
+  jobId: string,
+): Promise<AiSearchJobApiResponse> {
+  return extractCloudflareResult<AiSearchJobApiResponse>(
+    `get AI Search job "${jobId}" for instance "${aiSearchId}"`,
+    api.get(
+      `/accounts/${api.accountId}/ai-search/instances/${aiSearchId}/jobs/${jobId}`,
+    ),
+  );
+}
+
+export async function createAiSearchJob(
+  api: CloudflareApi,
+  aiSearchId: string,
+): Promise<AiSearchJobApiResponse> {
+  return extractCloudflareResult<AiSearchJobApiResponse>(
+    `create AI Search job for instance "${aiSearchId}"`,
+    api.post(
+      `/accounts/${api.accountId}/ai-search/instances/${aiSearchId}/jobs`,
+      {},
+    ),
+  );
+}
+
+export async function forceSyncAiSearch(
+  api: CloudflareApi,
+  aiSearchId: string,
+): Promise<void> {
+  const job = await createAiSearchJob(api, aiSearchId);
+  await poll({
+    description: `force sync AI Search instance "${aiSearchId}"`,
+    fn: () => getAiSearchJob(api, aiSearchId, job.id),
+    predicate: (result) => {
+      console.log(result);
+      return result.ended_at !== null;
+    },
+  });
 }

@@ -5,7 +5,11 @@ import type { Secret } from "../secret.ts";
 import { AccountApiToken } from "./account-api-token.ts";
 import { CloudflareApiError } from "./api-error.ts";
 import { extractCloudflareResult } from "./api-response.ts";
-import { createCloudflareApi, type CloudflareApiOptions } from "./api.ts";
+import {
+  CloudflareApi,
+  createCloudflareApi,
+  type CloudflareApiOptions,
+} from "./api.ts";
 
 /**
  * Properties for creating an AI Search Token
@@ -162,23 +166,11 @@ export const AiSearchToken = Resource(
     props: AiSearchTokenProps,
   ): Promise<AiSearchToken> {
     const api = await createCloudflareApi(props);
-    const tokenName = props.name ?? id;
+    const tokenName = props.name ?? this.scope.createPhysicalName(id);
 
     if (this.phase === "delete") {
-      // First delete the AI Search token registration
-      const aiSearchTokenId = this.output?.tokenId;
-      if (aiSearchTokenId) {
-        try {
-          const response = await api.delete(
-            `/accounts/${api.accountId}/ai-search/tokens/${aiSearchTokenId}`,
-          );
-          if (!response.ok && response.status !== 404) {
-            const errorText = await response.text();
-            console.error(`Failed to delete AI Search token: ${errorText}`);
-          }
-        } catch (error) {
-          console.error("Error deleting AI Search token:", error);
-        }
+      if (this.output?.tokenId && props.delete !== false) {
+        await deleteAiSearchToken(api, this.output.tokenId);
       }
 
       // The AccountApiToken will be cleaned up automatically by Alchemy's
@@ -193,7 +185,7 @@ export const AiSearchToken = Resource(
     }
 
     // Create an account API token with AI Search + R2 permissions
-    const accountToken = await AccountApiToken(`${id}-account-token`, {
+    const accountToken = await AccountApiToken("account-token", {
       name: `${tokenName} (AI Search Service Token)`,
       policies: [
         {
@@ -207,10 +199,13 @@ export const AiSearchToken = Resource(
           },
         },
       ],
-      apiToken: props.apiToken,
-      accountId: props.accountId,
       baseUrl: props.baseUrl,
       profile: props.profile,
+      apiKey: props.apiKey,
+      apiToken: props.apiToken,
+      accountId: props.accountId,
+      email: props.email,
+      delete: props.delete,
     });
 
     if (!accountToken.value) {
@@ -224,58 +219,106 @@ export const AiSearchToken = Resource(
 
     // Register the token with AI Search
     try {
-      const response = await extractCloudflareResult<AiSearchTokenApiResponse>(
-        `create AI Search token "${tokenName}"`,
-        api.post(`/accounts/${api.accountId}/ai-search/tokens`, {
-          name: tokenName,
-          cf_api_id: cfApiId,
-          cf_api_key: cfApiKey,
-        }),
-      );
+      const result = await createAiSearchToken(api, {
+        name: tokenName,
+        cf_api_id: cfApiId,
+        cf_api_key: cfApiKey,
+      });
 
       return {
         type: "ai_search_token" as const,
-        tokenId: response.id,
+        tokenId: result.id,
         accountTokenId: accountToken.id,
-        accountId: response.account_id,
-        accountTag: response.account_tag,
-        name: response.name,
-        cfApiId: response.cf_api_id,
+        accountId: result.account_id,
+        accountTag: result.account_tag,
+        name: result.name,
+        cfApiId: result.cf_api_id,
         cfApiKey: alchemy.secret(cfApiKey),
-        enabled: response.enabled,
-        createdAt: response.created_at,
-        modifiedAt: response.modified_at,
+        enabled: result.enabled,
+        createdAt: result.created_at,
+        modifiedAt: result.modified_at,
       };
     } catch (error) {
       // Check if token already exists and we should adopt it
       if (error instanceof CloudflareApiError && props.adopt) {
         // List tokens and find by name
-        const listResponse = await api.get(
-          `/accounts/${api.accountId}/ai-search/tokens`,
-        );
-        if (listResponse.ok) {
-          const listData = (await listResponse.json()) as {
-            result: AiSearchTokenApiResponse[];
+        const tokens = await listAiSearchTokens(api);
+        const existing = tokens.find((t) => t.name === tokenName);
+        if (existing) {
+          return {
+            type: "ai_search_token" as const,
+            tokenId: existing.id,
+            accountTokenId: accountToken.id,
+            accountId: existing.account_id,
+            accountTag: existing.account_tag,
+            name: existing.name,
+            cfApiId: existing.cf_api_id,
+            cfApiKey: alchemy.secret(cfApiKey),
+            enabled: existing.enabled,
+            createdAt: existing.created_at,
+            modifiedAt: existing.modified_at,
           };
-          const existing = listData.result?.find((t) => t.name === tokenName);
-          if (existing) {
-            return {
-              type: "ai_search_token" as const,
-              tokenId: existing.id,
-              accountTokenId: accountToken.id,
-              accountId: existing.account_id,
-              accountTag: existing.account_tag,
-              name: existing.name,
-              cfApiId: existing.cf_api_id,
-              cfApiKey: alchemy.secret(cfApiKey),
-              enabled: existing.enabled,
-              createdAt: existing.created_at,
-              modifiedAt: existing.modified_at,
-            };
-          }
         }
       }
       throw error;
     }
   },
 );
+
+/**
+ * Create an AI Search token
+ */
+export async function createAiSearchToken(
+  api: CloudflareApi,
+  payload: { name: string; cf_api_id: string; cf_api_key: string },
+): Promise<AiSearchTokenApiResponse> {
+  return await extractCloudflareResult<AiSearchTokenApiResponse>(
+    `create AI Search token "${payload.name}"`,
+    api.post(`/accounts/${api.accountId}/ai-search/tokens`, payload),
+  );
+}
+
+/**
+ * List all AI Search tokens in an account
+ */
+export async function listAiSearchTokens(
+  api: CloudflareApi,
+): Promise<AiSearchTokenApiResponse[]> {
+  return await extractCloudflareResult<AiSearchTokenApiResponse[]>(
+    `list AI Search tokens`,
+    api.get(`/accounts/${api.accountId}/ai-search/tokens`),
+  );
+}
+
+/**
+ * Delete an AI Search token
+ */
+export async function deleteAiSearchToken(
+  api: CloudflareApi,
+  tokenId: string,
+): Promise<void> {
+  try {
+    await extractCloudflareResult(
+      `delete AI Search token "${tokenId}"`,
+      api.delete(`/accounts/${api.accountId}/ai-search/tokens/${tokenId}`),
+    );
+  } catch (error) {
+    if (error instanceof CloudflareApiError && error.status === 404) {
+      return;
+    }
+    throw error;
+  }
+}
+
+/**
+ * Get an AI Search token
+ */
+export async function getAiSearchToken(
+  api: CloudflareApi,
+  tokenId: string,
+): Promise<AiSearchTokenApiResponse> {
+  return await extractCloudflareResult<AiSearchTokenApiResponse>(
+    `get AI Search token "${tokenId}"`,
+    api.get(`/accounts/${api.accountId}/ai-search/tokens/${tokenId}`),
+  );
+}
