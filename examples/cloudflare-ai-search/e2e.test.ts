@@ -12,7 +12,7 @@ export async function test(props: { url: string }) {
     description: "wait for search to be ready",
     fn: () =>
       fetch(
-        `${props.url}/query?q=${encodeURIComponent("What is the capital of Denmark?")}`,
+        `${props.url}/query?q=${encodeURIComponent("What is the capital of France?")}`,
       ),
     predicate: (res) => {
       console.log(res);
@@ -22,9 +22,9 @@ export async function test(props: { url: string }) {
   });
   const result = (await response.json()) as AutoRagAiSearchResponse;
   assert(
-    result.response.includes("Copenhagen"),
+    result.response.includes("Paris"),
     `Paris is not in the response: ${result.response}`,
   );
   assert(result.data.length > 0, "No data returned");
-  assert.equal(result.data[0].filename, "denmark.txt");
+  assert.equal(result.data[0].filename, "france.txt");
 }
