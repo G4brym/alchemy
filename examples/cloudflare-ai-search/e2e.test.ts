@@ -8,12 +8,12 @@ export async function test(props: { url: string }) {
     fn: () => fetch(props.url),
     predicate: (res) => res.ok,
   });
+  const url = new URL(props.url);
+  url.pathname = "/query";
+  url.searchParams.set("q", "What is the capital of France?");
   const response = await poll({
     description: "wait for search to be ready",
-    fn: () =>
-      fetch(
-        `${props.url}/query?q=${encodeURIComponent("What is the capital of France?")}`,
-      ),
+    fn: () => fetch(url),
     predicate: (res) => {
       console.log(res);
       return res.ok;
