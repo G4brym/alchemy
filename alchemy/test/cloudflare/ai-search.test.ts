@@ -92,10 +92,8 @@ describe("AiSearch Resource", () => {
       });
 
       expect(aiSearch.id).toEqual(instanceName);
-      expect(aiSearch.name).toEqual(instanceName);
-      expect(aiSearch.sourceType).toEqual("r2");
-      expect(aiSearch.sourceBucket).toEqual(bucketName);
-      expect(aiSearch.type).toEqual("ai_search");
+      expect(aiSearch.type).toEqual("r2");
+      expect(aiSearch.source).toEqual(bucketName);
       expect(aiSearch.tokenId).toBeTruthy();
       // Note: internalId and vectorizeName may not be immediately available
 
@@ -162,8 +160,8 @@ describe("AiSearch Resource", () => {
       });
 
       expect(aiSearch.id).toEqual(instanceName);
-      expect(aiSearch.sourceType).toEqual("r2");
-      expect(aiSearch.sourceBucket).toEqual(bucketName);
+      expect(aiSearch.type).toEqual("r2");
+      expect(aiSearch.source).toEqual(bucketName);
     } finally {
       await destroy(scope);
     }
@@ -213,8 +211,8 @@ describe("AiSearch Resource", () => {
       });
 
       expect(aiSearch.id).toEqual(instanceName);
-      expect(aiSearch.sourceType).toEqual("r2");
-      expect(aiSearch.sourceBucket).toEqual(bucketName);
+      expect(aiSearch.type).toEqual("r2");
+      expect(aiSearch.source).toEqual(bucketName);
       expect(aiSearch.tokenId).toBeTruthy();
     } finally {
       await destroy(scope);
@@ -244,8 +242,8 @@ describe("AiSearch Resource", () => {
         source: {
           type: "r2",
           bucket,
-          token, // Pass explicit token
         },
+        token, // Pass explicit token
         adopt: true,
       });
 
@@ -279,7 +277,7 @@ describe("AiSearch Resource", () => {
         chunkOverlap: 20,
         maxNumResults: 15,
         scoreThreshold: 0.3,
-        rewriteQuery: true,
+        rewrite: true,
         adopt: true,
       });
 
@@ -445,7 +443,7 @@ Contact us at support@example.com or visit our forums.
       });
 
       expect(aiSearch.id).toEqual(instanceName);
-      expect(aiSearch.sourceType).toEqual("r2");
+      expect(aiSearch.type).toEqual("r2");
 
       // 3. Wait for indexing to complete (status: "ready")
       // Note: This can take a while for initial indexing
@@ -494,7 +492,7 @@ Contact us at support@example.com or visit our forums.
         url: true,
         bindings: {
           AI: Ai(), // AI binding required to access AI Search
-          RAG_NAME: aiSearch.name, // Pass the actual instance name
+          RAG_NAME: aiSearch.id, // Pass the actual instance name
         },
       });
 
@@ -618,7 +616,7 @@ Schedule regular vet checkups and keep vaccinations current.
         url: true,
         bindings: {
           AI: Ai(),
-          RAG_NAME: aiSearch.name, // Pass the actual instance name
+          RAG_NAME: aiSearch.id, // Pass the actual instance name
         },
       });
 

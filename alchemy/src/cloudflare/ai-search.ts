@@ -3,6 +3,10 @@ import { Resource } from "../resource.ts";
 import { logger } from "../util/logger.ts";
 import { poll } from "../util/poll.ts";
 import { sleep } from "../util/sleep.ts";
+import {
+  snakeToCamelObjectDeep,
+  type SnakeToCamel,
+} from "../util/snake-to-camel.ts";
 import { AiSearchToken } from "./ai-search-token.ts";
 import { CloudflareApiError } from "./api-error.ts";
 import {
@@ -77,18 +81,30 @@ interface BaseAiSearchProps extends CloudflareApiOptions {
    */
   scoreThreshold?: number;
 
+  /**
+   * Whether to enable reranking
+   * @default { model: "@cf/baai/bge-reranker-base" }
+   */
   reranking?:
     | boolean
     | {
         model: AiSearch.RerankingModel;
       };
 
+  /**
+   * How to handle query rewriting
+   * @default { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" }
+   */
   rewrite?:
     | boolean
     | {
         model: AiSearch.RewriteModel;
       };
 
+  /**
+   * Whether to cache the search results
+   * @default { threshold: "close_enough" }
+   */
   cache?:
     | boolean
     | {
@@ -121,8 +137,6 @@ export type AiSearchProps = BaseAiSearchProps &
         tokenId: string;
       }
   );
-
-export type AiSearch = AiSearch.ApiResponse;
 
 export interface AiSearchR2Source {
   /**
@@ -202,6 +216,8 @@ export interface AiSearchWebCrawlerSource {
     storage_type?: "r2";
   };
 }
+
+export type AiSearch = SnakeToCamel<AiSearch.ApiResponse>;
 
 export const AiSearch = Resource(
   "cloudflare::AiSearch",
@@ -305,7 +321,7 @@ export const AiSearch = Resource(
 
     if (this.phase === "delete") {
       if (props.delete !== false && this.output?.id) {
-        await deleteIndex(api, this.output.vectorize_name);
+        await deleteIndex(api, this.output.vectorizeName);
         await deleteAiSearchInstance(api, this.output.id);
       }
       return this.destroy();
@@ -332,7 +348,10 @@ export const AiSearch = Resource(
         exclude_items: source.excludePaths,
         ...(source.type === "r2"
           ? {
-              r2_jurisdiction: source.jurisdiction,
+              r2_jurisdiction:
+                source.jurisdiction !== "default"
+                  ? source.jurisdiction
+                  : undefined,
               prefix: source.prefix,
             }
           : {
@@ -362,7 +381,6 @@ export const AiSearch = Resource(
         typeof props.cache === "object" ? props.cache.threshold : undefined,
       token_id: tokenId,
     };
-    console.log(payload);
 
     let instance: AiSearch.ApiResponse;
     if (this.phase === "update" && this.output?.id) {
@@ -399,8 +417,7 @@ export const AiSearch = Resource(
         }),
       );
     }
-
-    return instance;
+    return snakeToCamelObjectDeep(instance);
   },
 );
 
@@ -537,11 +554,6 @@ export declare namespace AiSearch {
     | (string & {});
 
   interface ApiPayload {
-    /**
-     * Your AI Search ID.
-     * @minLength 1
-     * @maxLength 32
-     */
     id: string;
     source: string;
     type: "r2" | "web-crawler";
@@ -553,14 +565,8 @@ export declare namespace AiSearch {
       | "close_enough"
       | "flexible_friend"
       | "anything_goes";
-    chunk?: boolean; // default: true
-    /**
-     * Maximum: 30, Minimum: 0, Default: 10
-     */
+    chunk?: boolean;
     chunk_overlap?: number;
-    /**
-     * Minimum: 64, Default: 256
-     */
     chunk_size?: number;
     custom_metadata?: Array<{
       data_type: "text" | "number" | "boolean";
@@ -572,9 +578,6 @@ export declare namespace AiSearch {
     }>;
     embedding_model?: EmbeddingModel;
     hybrid_search_enabled?: boolean;
-    /**
-     * Maximum: 50, Minimum: 1, Default: 10
-     */
     max_num_results?: number;
     metadata?: {
       created_from_aisearch_wizard?: boolean;
@@ -583,11 +586,11 @@ export declare namespace AiSearch {
     public_endpoint_params?: {
       authorized_hosts?: string[];
       chat_completions_endpoint?: {
-        disabled?: boolean; // Disable chat completions endpoint for this public endpoint
+        disabled?: boolean;
       };
       enabled?: boolean;
       mcp?: {
-        disabled?: boolean; // Disable MCP endpoint for this public endpoint
+        disabled?: boolean;
       };
       rate_limit?: {
         /**
@@ -601,7 +604,7 @@ export declare namespace AiSearch {
         technique?: "fixed" | "sliding";
       };
       search_endpoint?: {
-        disabled?: boolean; // Disable search endpoint for this public endpoint
+        disabled?: boolean;
       };
     };
     reranking?: boolean;
@@ -636,217 +639,93 @@ export declare namespace AiSearch {
         };
       };
     };
-
-    /**
-     * (format: uuid)
-     */
     token_id?: string;
   }
 
   interface ApiResponse {
-    /**
-     * Your AI Search ID.
-     * maxLength: 32, minLength: 1
-     */
     id: string;
-
     account_id: string;
     account_tag: string;
-
-    /**
-     * format: date-time
-     */
     created_at: string;
-
-    /**
-     * format: uuid
-     */
     internal_id: string;
-
-    /**
-     * format: date-time
-     */
     modified_at: string;
-
     source: string;
-
     type: "r2" | "web-crawler";
-
     vectorize_name: string;
-
     ai_gateway_id?: string;
-
     ai_search_model?: Model;
-
-    /**
-     * default: true
-     */
-    cache?: boolean;
-
-    /**
-     * default: "close_enough"
-     */
+    cache?: boolean; // default: true
     cache_threshold?:
       | "super_strict_match"
       | "close_enough"
       | "flexible_friend"
-      | "anything_goes";
-
-    /**
-     * default: true
-     */
-    chunk?: boolean;
-
-    /**
-     * maximum: 30, minimum: 0, default: 10
-     */
-    chunk_overlap?: number;
-
-    /**
-     * minimum: 64, default: 256
-     */
-    chunk_size?: number;
-
+      | "anything_goes"; // default: "close_enough"
+    chunk?: boolean; // default: true
+    chunk_overlap?: number; // maximum: 30, minimum: 0, default: 10
+    chunk_size?: number; // minimum: 64, default: 256
     created_by?: string;
-
     custom_metadata?: Array<{
       data_type: "text" | "number" | "boolean";
-      /**
-       * maxLength: 64, minLength: 1
-       */
       field_name: string;
     }>;
-
     embedding_model?: EmbeddingModel;
-
-    /**
-     * default: true
-     */
     enable?: boolean;
-
-    /**
-     * default: 1
-     */
-    engine_version?: number;
-
+    engine_version?: number; // default: 1
     hybrid_search_enabled?: boolean;
-
-    /**
-     * format: date-time
-     */
     last_activity?: string;
-
-    /**
-     * maximum: 50, minimum: 1, default: 10
-     */
-    max_num_results?: number;
-
+    max_num_results?: number; // maximum: 50, minimum: 1, default: 10
     metadata?: {
       created_from_aisearch_wizard?: boolean;
       worker_domain?: string;
     };
-
     modified_by?: string;
-
     paused?: boolean;
-
     public_endpoint_id?: string;
-
     public_endpoint_params?: {
       authorized_hosts?: string[];
-
       chat_completions_endpoint?: {
-        /**
-         * Disable chat completions endpoint for this public endpoint
-         */
         disabled?: boolean;
       };
       enabled?: boolean;
       mcp?: {
-        /**
-         * Disable MCP endpoint for this public endpoint
-         */
         disabled?: boolean;
       };
       rate_limit?: {
-        /**
-         * maximum: 3600000, minimum: 60000
-         */
-        period_ms?: number;
-        /**
-         * minimum: 1
-         */
+        period_ms?: number; // maximum: 3600000, minimum: 60000
         requests?: number;
         technique?: "fixed" | "sliding";
       };
       search_endpoint?: {
-        /**
-         * Disable search endpoint for this public endpoint
-         */
         disabled?: boolean;
       };
     };
-
     reranking?: boolean;
-
     reranking_model?: RerankingModel;
-
     rewrite_model?: RewriteModel;
-
     rewrite_query?: boolean;
-
-    /**
-     * maximum: 1, minimum: 0, default: 0.4
-     */
     score_threshold?: number;
-
     source_params?: {
-      /**
-       * List of path patterns to exclude. Micromatch glob syntax: * matches within, ** matches across segments.
-       */
       exclude_items?: string[];
-      /**
-       * List of path patterns to include. Micromatch glob syntax: * matches within, ** matches across segments.
-       */
       include_items?: string[];
       prefix?: string;
-      /**
-       * default: "default"
-       */
-      r2_jurisdiction?: string;
-
+      r2_jurisdiction?: string; // default: "default"
       web_crawler?: {
-        /**
-         * default: {"parse_type":"sitemap"}
-         */
         parse_options?: {
           include_headers?: Record<string, string>;
           include_images?: boolean;
-          /**
-           * List of specific sitemap URLs to use for crawling. Valid with 'sitemap' parse_type.
-           */
-          specific_sitemaps?: string[];
+          specific_sitemaps?: string[]; // valid with 'sitemap' parse_type
           use_browser_rendering?: boolean;
         };
-        /**
-         * default: "sitemap"
-         */
-        parse_type?: "sitemap" | "feed-rss";
+        parse_type?: "sitemap" | "feed-rss"; // default: "sitemap"
         store_options?: {
           storage_id: string;
-          /**
-           * default: "default"
-           */
-          r2_jurisdiction?: string;
+          r2_jurisdiction?: string; // default: "default"
           storage_type?: "r2";
         };
       };
     };
-
     status?: "waiting" | "ready" | "indexing" | "error";
-
     summarization?: boolean;
-
     summarization_model?:
       | "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
       | "@cf/meta/llama-3.1-8b-instruct-fast"
@@ -874,16 +753,10 @@ export declare namespace AiSearch {
       | "openai/gpt-5-mini"
       | "openai/gpt-5-nano"
       | (string & {});
-
     system_prompt_ai_search?: string;
     system_prompt_index_summarization?: string;
     system_prompt_rewrite_query?: string;
-
-    /**
-     * format: uuid
-     */
     token_id?: string;
-
     vectorize_active_namespace?: string;
   }
 }
@@ -1017,7 +890,7 @@ export async function runAiSearchJob(
   aiSearchId: string,
   log: (message: string) => void,
 ): Promise<void> {
-  log("Creating AI Search job...");
+  log("Preparing to index...");
   const job = await createAiSearchJob(api, aiSearchId);
   let lastLogId = 0;
   let done = false;

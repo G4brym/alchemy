@@ -21,7 +21,7 @@ const search = await AiSearch("docs-search", {
 
 ## Using AI Search from a Worker
 
-AI Search instances are accessed through the `AI` binding using `env.AI.autorag(name)`. Pass `search.name` as a binding so your worker knows the actual instance name (which may be auto-generated based on your app and stage):
+AI Search instances are accessed through the `AI` binding using `env.AI.autorag(name)`. Pass `search.id` as a binding so your worker knows the actual instance name (which may be auto-generated based on your app and stage):
 
 ```ts
 import { Worker, Ai, AiSearch, R2Bucket } from "alchemy/cloudflare";
@@ -36,7 +36,7 @@ await Worker("api", {
   entrypoint: "./src/worker.ts",
   bindings: {
     AI: Ai(), // AI binding required to access AI Search
-    RAG_NAME: search.name, // Pass the actual instance name
+    RAG_NAME: search.id, // Pass the actual instance name
   },
 });
 ```
@@ -124,9 +124,8 @@ const bucket = await R2Bucket("docs", { name: "my-docs" });
 
 const search = await AiSearch("advanced-search", {
   source: bucket,
-  reranking: true,
-  rerankingModel: "@cf/baai/bge-reranker-base",
-  rewriteQuery: true,
+  reranking: { model: "@cf/baai/bge-reranker-base" },
+  rewrite: true,
   scoreThreshold: 0.3,
 });
 ```
@@ -230,8 +229,8 @@ const search = await AiSearch("docs-search", {
   source: {
     type: "r2",
     bucket,
-    token, // Use the explicit token
   },
+  token, // Use the explicit token
 });
 ```
 
