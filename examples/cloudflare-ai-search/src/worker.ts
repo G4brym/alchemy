@@ -7,16 +7,22 @@ export default {
       const result = await env.AI.autorag(env.AI_SEARCH_ID).list();
       return Response.json(result);
     }
-    if (url.pathname === "/query" && url.searchParams.has("q")) {
-      const query = url.searchParams.get("q")!;
+    const query = url.searchParams.get("q");
+    if (url.pathname === "/query" && query) {
       const result = await env.AI.autorag(env.AI_SEARCH_ID).aiSearch({
         query,
       });
       return Response.json(result, {
         status: result.data.length > 0 ? 200 : 400,
       });
-    } else {
-      return new Response("Usage: /query?q=...");
+    } else if (url.pathname === "/search" && query) {
+      const result = await env.AI.autorag(env.AI_SEARCH_ID).search({
+        query,
+      });
+      return Response.json(result, {
+        status: result.data.length > 0 ? 200 : 400,
+      });
     }
+    return new Response("Usage: /query?q=... or /search?q=...");
   },
 };
