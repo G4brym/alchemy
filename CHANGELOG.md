@@ -1,3 +1,13 @@
+## v0.84.0
+
+### &nbsp;&nbsp;&nbsp;🐞 Bug Fixes
+
+- **cloudflare**: Disable preview urls for workers with durable objects &nbsp;-&nbsp; by **Michael K** and **Sam Goodwin** in https://github.com/alchemy-run/alchemy/issues/1321 [<samp>(6f26c)</samp>](https://github.com/alchemy-run/alchemy/commit/6f26c188)
+
+##### &nbsp;&nbsp;&nbsp;&nbsp;[View changes on GitHub](https://github.com/alchemy-run/alchemy/compare/v0.83.3...v0.84.0)
+
+---
+
 ## v0.83.3
 
 ### &nbsp;&nbsp;&nbsp;🐞 Bug Fixes
