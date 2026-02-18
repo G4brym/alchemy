@@ -30,6 +30,7 @@ await Promise.all(
 
 const search = await AiSearch("search", {
   source: bucket,
+  cache: false,
   delete: true,
   adopt: true,
 });

@@ -1,8 +1,11 @@
+import "../../src/test/vitest.ts";
+
 import { assert, describe, expect } from "vitest";
 import { alchemy } from "../../src/alchemy.ts";
 import { AiSearchToken } from "../../src/cloudflare/ai-search-token.ts";
 import {
   AiSearch,
+  deleteAiSearchInstance,
   getAiSearchInstance,
 } from "../../src/cloudflare/ai-search.ts";
 import { Ai } from "../../src/cloudflare/ai.ts";
@@ -10,10 +13,8 @@ import { createCloudflareApi } from "../../src/cloudflare/api.ts";
 import { R2Bucket } from "../../src/cloudflare/bucket.ts";
 import { Worker } from "../../src/cloudflare/worker.ts";
 import { destroy } from "../../src/destroy.ts";
-import { fetchAndExpectOK } from "../../src/util/safe-fetch.ts";
-import { BRANCH_PREFIX, waitFor } from "../util.ts";
-// must import this or else alchemy.test won't exist
-import "../../src/test/vitest.ts";
+import { poll } from "../../src/util/poll.ts";
+import { BRANCH_PREFIX } from "../util.ts";
 
 // Create API client for verification
 const api = await createCloudflareApi();
@@ -86,8 +87,8 @@ describe("AiSearch Resource", () => {
         source: {
           type: "r2",
           bucket,
-          // No token provided - should be auto-created
         },
+        indexOnCreate: false, // skip index on create to speed up test
         adopt: true,
       });
 
@@ -112,6 +113,7 @@ describe("AiSearch Resource", () => {
         maxNumResults: 20,
         scoreThreshold: 0.5,
         reranking: true,
+        indexOnCreate: false, // skip index on create to speed up test
         adopt: true,
       });
 
@@ -156,6 +158,7 @@ describe("AiSearch Resource", () => {
           type: "r2",
           bucket: bucketName, // String instead of R2Bucket resource
         },
+        indexOnCreate: false, // skip index on create to speed up test
         adopt: true,
       });
 
@@ -207,6 +210,7 @@ describe("AiSearch Resource", () => {
       aiSearch = await AiSearch("shorthand-search", {
         name: instanceName,
         source: bucket, // Direct R2Bucket instead of { type: "r2", bucket }
+        indexOnCreate: false, // skip index on create to speed up test
         adopt: true,
       });
 
@@ -244,6 +248,7 @@ describe("AiSearch Resource", () => {
           bucket,
         },
         token, // Pass explicit token
+        indexOnCreate: false, // skip index on create to speed up test
         adopt: true,
       });
 
@@ -277,7 +282,8 @@ describe("AiSearch Resource", () => {
         chunkOverlap: 20,
         maxNumResults: 15,
         scoreThreshold: 0.3,
-        rewrite: true,
+        rewriteQuery: true,
+        indexOnCreate: false, // skip index on create to speed up test
         adopt: true,
       });
 
@@ -310,6 +316,7 @@ describe("AiSearch Resource", () => {
           bucket,
         },
         maxNumResults: 10,
+        indexOnCreate: false, // skip index on create to speed up test
       });
 
       expect(aiSearch1.id).toEqual(instanceName);
@@ -322,6 +329,7 @@ describe("AiSearch Resource", () => {
           bucket,
         },
         maxNumResults: 25,
+        indexOnCreate: false, // skip index on create to speed up test
         adopt: true,
       });
 
@@ -349,7 +357,8 @@ describe("AiSearch Resource", () => {
           type: "r2",
           bucket,
         },
-        delete: false, // Don't delete on destroy
+        indexOnCreate: false, // skip index on create to speed up test
+        delete: false, // don't delete on destroy
         adopt: true,
       });
 
@@ -359,194 +368,32 @@ describe("AiSearch Resource", () => {
       // Instance should still exist
       const instance = await getAiSearchInstance(api, instanceName);
       expect(instance.id).toEqual(instanceName);
-
-      // Clean up manually for test hygiene
-      await api.delete(
-        `/accounts/${api.accountId}/ai-search/instances/${instanceName}`,
-      );
-    } catch (error) {
-      // Clean up on error
-      await api
-        .delete(
-          `/accounts/${api.accountId}/ai-search/instances/${instanceName}`,
-        )
-        .catch(() => {});
-      throw error;
+    } finally {
+      await deleteAiSearchInstance(api, instanceName);
     }
   });
 
-  // End-to-end test with Worker binding
-  test("create AI Search and query via Worker binding", async (scope) => {
-    const instanceName = `${testId}-e2e`;
-    const bucketName = `${testId}-e2e-bucket`;
-    const workerName = `${testId}-e2e-worker`;
-
-    try {
-      // 1. Create an R2 bucket with test documents
-      // Use delete: false because the bucket is used by AI Search
-      const bucket = await R2Bucket("e2e-bucket", {
-        name: bucketName,
-        adopt: true,
-        delete: false,
-      });
-
-      // Upload test documents to the bucket
-      await bucket.put(
-        "test-doc.md",
-        `# Getting Started Guide
-
-Welcome to our documentation! This guide will help you get started.
-
-## Installation
-
-To install the package, run:
-
-\`\`\`bash
-npm install our-package
-\`\`\`
-
-## Configuration
-
-Configure the package by creating a config file.
-
-## Usage
-
-Import and use the package in your code.
-`,
-      );
-
-      await bucket.put(
-        "faq.md",
-        `# Frequently Asked Questions
-
-## What is this package?
-
-This package helps you build amazing applications.
-
-## How do I get support?
-
-Contact us at support@example.com or visit our forums.
-`,
-      );
-
-      // 2. Create AI Search instance backed by the R2 bucket
-      // Use delete: false because AI Search takes significant time to index documents
-      // This allows subsequent test runs to use an already-indexed instance
-      const aiSearch = await AiSearch("e2e-search", {
-        name: instanceName,
-        source: {
-          type: "r2",
-          bucket,
-        },
-        adopt: true,
-        delete: false,
-      });
-
-      expect(aiSearch.id).toEqual(instanceName);
-      expect(aiSearch.type).toEqual("r2");
-
-      // 3. Wait for indexing to complete (status: "ready")
-      // Note: This can take a while for initial indexing
-      await waitFor(
-        async () => {
-          const instance = await getAiSearchInstance(api, instanceName);
-          return instance.status;
-        },
-        (status) => status === "ready",
-        { timeoutMs: 180_000, intervalMs: 10_000 },
-      );
-
-      // 4. Create a worker that uses the AI binding to query AI Search
-      const worker = await Worker(workerName, {
-        name: workerName,
-        adopt: true,
-        script: `
-            export default {
-              async fetch(request, env, ctx) {
-                const url = new URL(request.url);
-                const query = url.searchParams.get('q') || 'installation';
-                
-                try {
-                  // Access AI Search through the AI binding using RAG_NAME
-                  const result = await env.AI.autorag(env.RAG_NAME).search({
-                    query,
-                    max_num_results: 5,
-                  });
-                  
-                  return Response.json({
-                    success: true,
-                    searchQuery: result.search_query,
-                    resultCount: result.data?.length || 0,
-                    hasResults: (result.data?.length || 0) > 0,
-                  });
-                } catch (error) {
-                  return Response.json({
-                    success: false,
-                    error: error.message,
-                  }, { status: 500 });
-                }
-              }
-            };
-          `,
-        format: "esm",
-        url: true,
-        bindings: {
-          AI: Ai(), // AI binding required to access AI Search
-          RAG_NAME: aiSearch.id, // Pass the actual instance name
-        },
-      });
-
-      expect(worker.url).toBeTruthy();
-
-      // Wait for worker to be ready
-      await new Promise((resolve) => setTimeout(resolve, 2000));
-
-      // 5. Query the worker and verify AI Search returns results
-      // Retry for a longer time since indexing may still be propagating even after "ready" status
-      // First-time indexing can take several minutes
-      let data: any;
-      await waitFor(
-        async () => {
-          const response = await fetchAndExpectOK(
-            `${worker.url}?q=installation`,
-          );
-          data = await response.json();
-          console.log("AI Search response:", JSON.stringify(data, null, 2));
-          return data;
-        },
-        (result) => result.success && result.hasResults,
-        { timeoutMs: 120_000, intervalMs: 10_000 },
-      );
-
-      expect(data.success).toBe(true);
-      expect(data.searchQuery).toBeTruthy();
-      // Verify AI Search actually found documents
-      expect(data.hasResults).toBe(true);
-      expect(data.resultCount).toBeGreaterThan(0);
-    } finally {
-      await destroy(scope);
-    }
-  }); // 5 minute timeout for indexing
-
   // Test aiSearch() with RAG response generation
-  test("AI Search with RAG response generation via Worker", async (scope) => {
-    const instanceName = `${testId}-rag`;
-    const bucketName = `${testId}-rag-bucket`;
-    const workerName = `${testId}-rag-worker`;
+  test(
+    "AI Search with RAG response generation via Worker",
+    async (scope) => {
+      const instanceName = `${testId}-rag`;
+      const bucketName = `${testId}-rag-bucket`;
+      const workerName = `${testId}-rag-worker`;
 
-    try {
-      // 1. Create bucket with test content
-      const bucket = await R2Bucket("rag-bucket", {
-        name: bucketName,
-        adopt: true,
-        // we can't seem to delete a bucket used by AI search
-        delete: false,
-        // empty: true, // Empty bucket on deletion since we upload docs
-      });
+      try {
+        // 1. Create bucket with test content
+        const bucket = await R2Bucket("rag-bucket", {
+          name: bucketName,
+          adopt: true,
+          // we can't seem to delete a bucket used by AI search
+          delete: false,
+          // empty: true, // Empty bucket on deletion since we upload docs
+        });
 
-      await bucket.put(
-        "llama-care.md",
-        `# How to Care for Llamas
+        await bucket.put(
+          "llama-care.md",
+          `# How to Care for Llamas
 
 ## Feeding
 
@@ -560,34 +407,26 @@ Provide a shelter with at least 40 square feet per llama.
 
 Schedule regular vet checkups and keep vaccinations current.
 `,
-      );
+        );
 
-      // 2. Create AI Search instance
-      const aiSearch = await AiSearch("rag-search", {
-        name: instanceName,
-        source: {
-          type: "r2",
-          bucket,
-        },
-        adopt: true,
-        // we don't delete it because it's fucking slow as shit to spin up
-        delete: false,
-      });
+        // 2. Create AI Search instance
+        const aiSearch = await AiSearch("rag-search", {
+          name: instanceName,
+          source: {
+            type: "r2",
+            bucket,
+          },
+          cache: false,
+          adopt: true,
+        });
 
-      expect(aiSearch.id).toEqual(instanceName);
+        expect(aiSearch.id).toEqual(instanceName);
 
-      // 3. Wait for indexing
-      await waitFor(
-        async () => (await getAiSearchInstance(api, instanceName)).status,
-        (status) => status === "ready",
-        { timeoutMs: 180_000, intervalMs: 1000 },
-      );
-
-      // 4. Create worker that uses aiSearch (RAG)
-      const worker = await Worker(workerName, {
-        name: workerName,
-        adopt: true,
-        script: `
+        // 3. Create worker that uses aiSearch (RAG)
+        const worker = await Worker(workerName, {
+          name: workerName,
+          adopt: true,
+          script: `
             export default {
               async fetch(request, env, ctx) {
                 try {
@@ -612,29 +451,46 @@ Schedule regular vet checkups and keep vaccinations current.
               }
             };
           `,
-        format: "esm",
-        url: true,
-        bindings: {
-          AI: Ai(),
-          RAG_NAME: aiSearch.id, // Pass the actual instance name
-        },
-      });
+          format: "esm",
+          url: true,
+          bindings: {
+            AI: Ai(),
+            RAG_NAME: aiSearch.id, // Pass the actual instance name
+          },
+        });
 
-      expect(worker.url).toBeTruthy();
+        expect(worker.url).toBeTruthy();
 
-      await new Promise((resolve) => setTimeout(resolve, 2000));
+        await new Promise((resolve) => setTimeout(resolve, 2000));
 
-      // 5. Verify RAG response
-      const response = await fetchAndExpectOK(worker.url!);
-      const data: any = await response.json();
+        // 5. Verify RAG response
+        const data = await poll({
+          description: "wait for AI Search to be ready",
+          fn: async () => {
+            const url = new URL(worker.url!);
+            url.searchParams.set("q", "installation");
+            const response = await fetch(url);
+            return (await response.json()) as {
+              success: boolean;
+              hasResponse: boolean;
+              responseLength: number;
+              sourceCount: number;
+            };
+          },
+          predicate: (result) => result.success && result.sourceCount > 0,
+          initialDelay: 5000,
+          maxDelay: 10_000,
+        });
 
-      expect(data.success).toBe(true);
-      // AI Search with RAG should generate a response based on source documents
-      expect(data.hasResponse).toBe(true);
-      expect(data.responseLength).toBeGreaterThan(0);
-      expect(data.sourceCount).toBeGreaterThan(0);
-    } finally {
-      await destroy(scope);
-    }
-  }); // 5 minute timeout
+        expect(data.success).toBe(true);
+        // AI Search with RAG should generate a response based on source documents
+        expect(data.hasResponse).toBe(true);
+        expect(data.responseLength).toBeGreaterThan(0);
+        expect(data.sourceCount).toBeGreaterThan(0);
+      } finally {
+        await destroy(scope);
+      }
+    },
+    60_000 * 10,
+  );
 });

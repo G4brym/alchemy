@@ -8,7 +8,7 @@ import {
   type SnakeToCamel,
 } from "../util/snake-to-camel.ts";
 import { AiSearchToken } from "./ai-search-token.ts";
-import { CloudflareApiError } from "./api-error.ts";
+import { CloudflareApiError, isCloudflareApiError } from "./api-error.ts";
 import {
   extractCloudflareResult,
   type CloudflareApiErrorPayload,
@@ -41,79 +41,109 @@ interface BaseAiSearchProps extends CloudflareApiOptions {
 
   /**
    * Text generation model for AI responses
+   *
    * @default "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
    */
   aiSearchModel?: AiSearch.Model;
 
   /**
    * Embedding model for vectorization
+   *
    * @default "@cf/baai/bge-m3"
    */
   embeddingModel?: AiSearch.EmbeddingModel;
 
   /**
    * Enable chunking of source documents
+   *
    * @default true
    */
   chunk?: boolean;
 
   /**
    * Size of each chunk (minimum 64)
+   *
    * @default 256
    */
   chunkSize?: number;
 
   /**
    * Overlap between chunks (0-30)
+   *
    * @default 10
    */
   chunkOverlap?: number;
 
   /**
    * Maximum search results (1-50)
+   *
    * @default 10
    */
   maxNumResults?: number;
 
   /**
    * Minimum match score (0-1)
+   *
    * @default 0.4
    */
   scoreThreshold?: number;
 
   /**
-   * Whether to enable reranking
-   * @default { model: "@cf/baai/bge-reranker-base" }
+   * Enable result reranking
+   *
+   * @default false
    */
-  reranking?:
-    | boolean
-    | {
-        model: AiSearch.RerankingModel;
-      };
+  reranking?: boolean;
 
   /**
-   * How to handle query rewriting
-   * @default { model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast" }
+   * Reranking model
+   *
+   * @default "@cf/baai/bge-reranker-base"
    */
-  rewrite?:
-    | boolean
-    | {
-        model: AiSearch.RewriteModel;
-      };
+  rerankingModel?: AiSearch.RerankingModel;
 
   /**
-   * Whether to cache the search results
-   * @default { threshold: "close_enough" }
+   * Enable query rewriting for better retrieval
+   *
+   * @default false
    */
-  cache?:
-    | boolean
-    | {
-        threshold:
-          | "super_strict_match"
-          | "close_enough"
-          | "flexible_friend"
-          | "anything_goes";
-      };
+  rewriteQuery?: boolean;
+
+  /**
+   * Query rewriting model
+   *
+   * @default "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
+   */
+  rewriteModel?: AiSearch.Model;
+
+  /**
+   * Enable similarity caching
+   *
+   * @default false
+   */
+  cache?: boolean;
+
+  /**
+   * Cache similarity threshold
+   *
+   * @default "close_enough"
+   */
+  cacheThreshold?:
+    | "super_strict_match"
+    | "close_enough"
+    | "flexible_friend"
+    | "anything_goes";
+
+  /**
+   * Custom metadata
+   */
+  metadata?: Record<string, unknown>;
+
+  /**
+   * Whether to index the source documents when the AI Search instance is created
+   * @default true
+   */
+  indexOnCreate?: boolean;
 
   /**
    * Whether to delete the AI Search instance when removed from Alchemy
@@ -368,17 +398,13 @@ export const AiSearch = Resource(
       chunk_overlap: props.chunkOverlap,
       max_num_results: props.maxNumResults,
       score_threshold: props.scoreThreshold,
-      reranking:
-        typeof props.reranking === "boolean" ? props.reranking : undefined,
-      reranking_model:
-        typeof props.reranking === "object" ? props.reranking.model : undefined,
-      rewrite_query:
-        typeof props.rewrite === "boolean" ? props.rewrite : undefined,
-      rewrite_model:
-        typeof props.rewrite === "object" ? props.rewrite.model : undefined,
-      cache: typeof props.cache === "boolean" ? props.cache : undefined,
-      cache_threshold:
-        typeof props.cache === "object" ? props.cache.threshold : undefined,
+      reranking: props.reranking,
+      reranking_model: props.rerankingModel,
+      rewrite_query: props.rewriteQuery,
+      rewrite_model: props.rewriteModel,
+      cache: props.cache,
+      cache_threshold: props.cacheThreshold,
+      metadata: props.metadata,
       token_id: tokenId,
     };
 
@@ -408,14 +434,16 @@ export const AiSearch = Resource(
           throw error;
         }
       }
-      await runAiSearchJob(api, instance.id, (message) =>
-        logger.task(id, {
-          prefix: "index",
-          prefixColor: "gray",
-          resource: id,
-          message,
-        }),
-      );
+      if (props.indexOnCreate !== false) {
+        await runAiSearchJob(api, instance.id, (message) =>
+          logger.task(id, {
+            prefix: "index",
+            prefixColor: "gray",
+            resource: id,
+            message,
+          }),
+        );
+      }
     }
     return snakeToCamelObjectDeep(instance);
   },
@@ -525,34 +553,6 @@ export declare namespace AiSearch {
 
   type RerankingModel = "@cf/baai/bge-reranker-base" | (string & {});
 
-  type RewriteModel =
-    | "@cf/meta/llama-3.3-70b-instruct-fp8-fast"
-    | "@cf/meta/llama-3.1-8b-instruct-fast"
-    | "@cf/meta/llama-3.1-8b-instruct-fp8"
-    | "@cf/meta/llama-4-scout-17b-16e-instruct"
-    | "@cf/qwen/qwen3-30b-a3b-fp8"
-    | "@cf/deepseek-ai/deepseek-r1-distill-qwen-32b"
-    | "@cf/moonshotai/kimi-k2-instruct"
-    | "anthropic/claude-3-7-sonnet"
-    | "anthropic/claude-sonnet-4"
-    | "anthropic/claude-opus-4"
-    | "anthropic/claude-3-5-haiku"
-    | "cerebras/qwen-3-235b-a22b-instruct"
-    | "cerebras/qwen-3-235b-a22b-thinking"
-    | "cerebras/llama-3.3-70b"
-    | "cerebras/llama-4-maverick-17b-128e-instruct"
-    | "cerebras/llama-4-scout-17b-16e-instruct"
-    | "cerebras/gpt-oss-120b"
-    | "google-ai-studio/gemini-2.5-flash"
-    | "google-ai-studio/gemini-2.5-pro"
-    | "grok/grok-4"
-    | "groq/llama-3.3-70b-versatile"
-    | "groq/llama-3.1-8b-instant"
-    | "openai/gpt-5"
-    | "openai/gpt-5-mini"
-    | "openai/gpt-5-nano"
-    | (string & {});
-
   interface ApiPayload {
     id: string;
     source: string;
@@ -609,7 +609,7 @@ export declare namespace AiSearch {
     };
     reranking?: boolean;
     reranking_model?: RerankingModel;
-    rewrite_model?: RewriteModel;
+    rewrite_model?: Model;
     rewrite_query?: boolean;
 
     /**
@@ -701,7 +701,7 @@ export declare namespace AiSearch {
     };
     reranking?: boolean;
     reranking_model?: RerankingModel;
-    rewrite_model?: RewriteModel;
+    rewrite_model?: Model;
     rewrite_query?: boolean;
     score_threshold?: number;
     source_params?: {
@@ -877,12 +877,21 @@ export async function listAiSearchJobLogs(
   aiSearchId: string,
   jobId: string,
 ): Promise<AiSearchJobLogItem[]> {
-  return await extractCloudflareResult<AiSearchJobLogItem[]>(
-    `list AI Search job logs for job "${jobId}" for instance "${aiSearchId}"`,
-    api.get(
-      `/accounts/${api.accountId}/ai-search/instances/${aiSearchId}/jobs/${jobId}/logs?per_page=500`,
-    ),
-  );
+  try {
+    return await extractCloudflareResult<AiSearchJobLogItem[]>(
+      `list AI Search job logs for job "${jobId}" for instance "${aiSearchId}"`,
+      api.get(
+        `/accounts/${api.accountId}/ai-search/instances/${aiSearchId}/jobs/${jobId}/logs?per_page=500`,
+      ),
+    );
+  } catch (error) {
+    if (
+      isCloudflareApiError(error, { code: 7002 }) // ai_search_not_found
+    ) {
+      return [];
+    }
+    throw error;
+  }
 }
 
 export async function runAiSearchJob(
