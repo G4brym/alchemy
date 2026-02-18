@@ -30,6 +30,7 @@ await Promise.all(
 
 const search = await AiSearch("search", {
   source: bucket,
+  cache: false,
   delete: true,
   adopt: true,
 });
@@ -42,7 +43,7 @@ export const worker = await Worker("worker", {
   entrypoint: "src/worker.ts",
   bindings: {
     AI: Ai(),
-    AI_SEARCH_ID: search.id,
+    RAG_ID: search.id,
   },
 });
 

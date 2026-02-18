@@ -164,6 +164,7 @@ export async function WranglerJson(
     limits: worker.limits
       ? {
           cpu_ms: worker.limits.cpu_ms ?? 30_000,
+          subrequests: worker.limits.subrequests,
         }
       : undefined,
     logpush: worker.logpush,
@@ -286,6 +287,7 @@ async function processBindings(
   const ratelimits: WranglerJsonConfig["ratelimits"] = [];
   const containers: WranglerJsonConfig["containers"] = [];
   const workerLoaders: WranglerJsonConfig["worker_loaders"] = [];
+  const vpcServices: WranglerJsonConfig["vpc_services"] = [];
 
   for (const eventSource of eventSources ?? []) {
     if (isQueueEventSource(eventSource)) {
@@ -534,6 +536,12 @@ async function processBindings(
     } else if (binding.type === "worker_loader") {
       workerLoaders.push({
         binding: bindingName,
+      });
+    } else if (binding.type === "vpc_service") {
+      vpcServices.push({
+        binding: bindingName,
+        service_id: binding.serviceId,
+        remote: true,
       });
     } else {
       console.log("binding", binding);

@@ -21,7 +21,7 @@ const search = await AiSearch("docs-search", {
 
 ## Using AI Search from a Worker
 
-AI Search instances are accessed through the `AI` binding using `env.AI.autorag(name)`. Pass `search.name` as a binding so your worker knows the actual instance name (which may be auto-generated based on your app and stage):
+AI Search instances are accessed through the `AI` binding using `env.AI.autorag(name)`. Pass `search.id` as a binding so your worker knows the actual instance name (which may be auto-generated based on your app and stage):
 
 ```ts
 import { Worker, Ai, AiSearch, R2Bucket } from "alchemy/cloudflare";
@@ -36,7 +36,7 @@ await Worker("api", {
   entrypoint: "./src/worker.ts",
   bindings: {
     AI: Ai(), // AI binding required to access AI Search
-    RAG_NAME: search.name, // Pass the actual instance name
+    RAG_ID: search.id, // Pass the actual instance name
   },
 });
 ```
@@ -49,7 +49,7 @@ export default {
     const query = url.searchParams.get("q") || "";
 
     // Use search() for vector similarity search only
-    const searchResults = await env.AI.autorag(env.RAG_NAME).search({
+    const searchResults = await env.AI.autorag(env.RAG_ID).search({
       query,
       max_num_results: 10,
     });
@@ -62,7 +62,7 @@ export default {
 ```
 
 :::tip[Instance Naming]
-If you don't provide an explicit `name`, Alchemy generates one using `${app}-${stage}-${id}` (e.g., `myapp-dev-docs-search`). Always use `search.name` as a binding for portability across environments, or pass an explicit `name` if you need a predictable value.
+If you don't provide an explicit `name`, Alchemy generates one using `${app}-${stage}-${id}` (e.g., `myapp-dev-docs-search`). Always use `search.id` as a binding for portability across environments, or pass an explicit `name` if you need a predictable value.
 :::
 
 ## RAG Response Generation
@@ -76,7 +76,7 @@ export default {
     const { question } = await request.json();
 
     // Use aiSearch() for RAG - returns AI response + sources
-    const result = await env.AI.autorag(env.RAG_NAME).aiSearch({
+    const result = await env.AI.autorag(env.RAG_ID).aiSearch({
       query: question,
       model: "@cf/meta/llama-3.3-70b-instruct-fp8-fast",
       max_num_results: 5,
@@ -165,6 +165,29 @@ The domain must be:
 - All URLs must be from the same domain
 :::
 
+### R2 Source with Paths and Jurisdiction
+
+When using an R2 source object instead of a bucket directly, you can set jurisdiction, prefix, and path filters:
+
+```ts
+import { AiSearch, R2Bucket } from "alchemy/cloudflare";
+
+const bucket = await R2Bucket("docs", { name: "my-docs" });
+
+const search = await AiSearch("docs-search", {
+  source: {
+    type: "r2",
+    bucket,
+    jurisdiction: "eu", // or "default"
+    prefix: "public/",
+    includePaths: ["**/*.md", "**/docs/**"],
+    excludePaths: ["**/draft/**"],
+  },
+});
+```
+
+Path patterns support wildcards: `*` matches any characters except `/`, `**` matches any characters including `/` (up to 10 patterns each for include and exclude).
+
 ### Low-Level Web Crawler Configuration
 
 For more control, configure the web-crawler source directly:
@@ -178,9 +201,22 @@ const search = await AiSearch("docs-search", {
     domain: "docs.example.com", // Just the domain, not a URL
     includePaths: ["**/docs/**", "**/blog/**"],
     excludePaths: ["**/api/**"],
+    parseType: "sitemap", // or "feed-rss"
+    parseOptions: {
+      include_images: true,
+      use_browser_rendering: false,
+      specific_sitemaps: ["https://docs.example.com/sitemap.xml"],
+    },
+    storeOptions: {
+      storage_id: "my-r2-bucket-name",
+      jurisdiction: "default",
+      storage_type: "r2",
+    },
   },
 });
 ```
+
+Path patterns support wildcards (up to 10 each). `parseOptions` can include `include_headers`, `include_images`, `specific_sitemaps` (when `parseType` is `"sitemap"`), and `use_browser_rendering`. Use `storeOptions` to send crawled content to an R2 bucket.
 
 ## With Caching
 
@@ -194,7 +230,7 @@ const bucket = await R2Bucket("docs", { name: "my-docs" });
 const search = await AiSearch("cached-search", {
   source: bucket,
   cache: true,
-  cacheThreshold: 0.9, // Cache queries with 90%+ similarity
+  cacheThreshold: "close_enough", // or "super_strict_match" | "flexible_friend" | "anything_goes"
 });
 ```
 
@@ -230,8 +266,8 @@ const search = await AiSearch("docs-search", {
   source: {
     type: "r2",
     bucket,
-    token, // Use the explicit token
   },
+  token, // Use the explicit token
 });
 ```
 
@@ -253,6 +289,11 @@ See [AiSearchToken](/providers/cloudflare/ai-search-token) for more details.
 | `reranking` | `boolean` | `false` | Enable result reranking |
 | `rerankingModel` | `string` | `@cf/baai/bge-reranker-base` | Reranking model |
 | `rewriteQuery` | `boolean` | `false` | Enable query rewriting |
+| `rewriteModel` | `string` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Query rewriting model |
 | `cache` | `boolean` | `false` | Enable similarity caching |
+| `cacheThreshold` | `"super_strict_match" \| "close_enough" \| "flexible_friend" \| "anything_goes"` | `"close_enough"` | Cache similarity threshold |
+| `metadata` | `Record<string, unknown>` | — | Custom metadata |
+| `indexOnCreate` | `boolean` | `true` | Index source documents when the instance is created |
+| `token` | `AiSearchToken` | auto-created | Service token (or use `tokenId` with an existing token UUID) |
 | `delete` | `boolean` | `true` | Delete instance on removal |
 | `adopt` | `boolean` | `false` | Adopt existing instance |

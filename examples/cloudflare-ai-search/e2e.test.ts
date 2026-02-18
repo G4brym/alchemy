@@ -23,6 +23,8 @@ export async function test(props: { url: string }) {
       console.log(res);
       return res.ok;
     },
+    initialDelay: 5000,
+    maxDelay: 10_000,
   });
   console.log("index ready");
   const url = new URL(props.url);
