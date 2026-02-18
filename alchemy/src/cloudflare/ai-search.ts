@@ -418,7 +418,7 @@ export const AiSearch = Resource(
     let instance: AiSearch.ApiResponse;
     if (this.phase === "update" && this.output?.id) {
       const replace =
-        "type" in this.output &&
+        "source" in this.output &&
         (payload.type !== this.output.type ||
           payload.source !== this.output.source);
       // the development version of this resource had different properties, so check those to avoid an unnecessary replacement
