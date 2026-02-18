@@ -430,8 +430,8 @@ Schedule regular vet checkups and keep vaccinations current.
             export default {
               async fetch(request, env, ctx) {
                 try {
-                  // Access AI Search through the AI binding using RAG_NAME
-                  const result = await env.AI.autorag(env.RAG_NAME).aiSearch({
+                  // Access AI Search through the AI binding using RAG_ID
+                  const result = await env.AI.autorag(env.RAG_ID).aiSearch({
                     query: "How do I feed a llama?",
                     max_num_results: 3,
                   });
@@ -455,7 +455,7 @@ Schedule regular vet checkups and keep vaccinations current.
           url: true,
           bindings: {
             AI: Ai(),
-            RAG_NAME: aiSearch.id, // Pass the actual instance name
+            RAG_ID: aiSearch.id, // Pass the actual instance name
           },
         });
 

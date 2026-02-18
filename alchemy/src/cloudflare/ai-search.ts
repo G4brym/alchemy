@@ -29,7 +29,9 @@ import { deleteIndex } from "./vectorize-index.ts";
 interface BaseAiSearchProps extends CloudflareApiOptions {
   /**
    * Name of the AI Search instance
-   * @default Uses the resource ID
+   * @default `${app}-${stage}-${id}`
+   * @minLength 1
+   * @maxLength 32
    */
   name?: string;
 
@@ -247,7 +249,12 @@ export interface AiSearchWebCrawlerSource {
   };
 }
 
-export type AiSearch = SnakeToCamel<AiSearch.ApiResponse>;
+export type AiSearch = SnakeToCamel<AiSearch.ApiResponse> & {
+  /**
+   * The name of the AI Search instance (this is an alias for the `id` property)
+   */
+  name: string;
+};
 
 export const AiSearch = Resource(
   "cloudflare::AiSearch",
@@ -445,7 +452,10 @@ export const AiSearch = Resource(
         );
       }
     }
-    return snakeToCamelObjectDeep(instance);
+    return {
+      ...snakeToCamelObjectDeep(instance),
+      name: instance.id,
+    };
   },
 );
 
