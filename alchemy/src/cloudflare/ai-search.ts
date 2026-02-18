@@ -417,10 +417,21 @@ export const AiSearch = Resource(
 
     let instance: AiSearch.ApiResponse;
     if (this.phase === "update" && this.output?.id) {
-      if (
-        payload.source !== this.output.source ||
-        payload.type !== this.output.type
-      ) {
+      const replace =
+        "type" in this.output &&
+        (payload.type !== this.output.type ||
+          payload.source !== this.output.source);
+      // the development version of this resource had different properties, so check those to avoid an unnecessary replacement
+      const replaceLegacy =
+        "sourceType" in this.output &&
+        (payload.type !== this.output.sourceType ||
+          (payload.type === "r2" &&
+            "sourceBucket" in this.output &&
+            payload.source !== this.output.sourceBucket) ||
+          (payload.type === "web-crawler" &&
+            "sourceDomain" in this.output &&
+            payload.source !== this.output.sourceDomain));
+      if (replace || replaceLegacy) {
         return this.replace(true);
       }
       instance = await updateAiSearchInstance(api, this.output.id, payload);
