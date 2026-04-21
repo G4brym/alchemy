@@ -1,7 +1,12 @@
 import "../../src/test/vitest.ts";
 
-import { assert, describe, expect } from "vitest";
+import { describe, expect } from "vitest";
 import { alchemy } from "../../src/alchemy.ts";
+import {
+  AiSearchNamespace,
+  deleteAiSearchNamespace,
+  getAiSearchNamespace,
+} from "../../src/cloudflare/ai-search-namespace.ts";
 import { AiSearchToken } from "../../src/cloudflare/ai-search-token.ts";
 import {
   AiSearch,
@@ -23,6 +28,15 @@ const test = alchemy.test(import.meta, {
   prefix: BRANCH_PREFIX,
 });
 
+/**
+ * Cleanup-safe error filter: swallow 404s (resource already gone), re-throw
+ * everything else so real API errors (auth, 5xx, rate limit) surface in CI.
+ * Replaces the dangerous `.catch(() => {})` pattern.
+ */
+function ignore404(e: unknown): void {
+  if ((e as { status?: number })?.status !== 404) throw e;
+}
+
 describe("AiSearchToken Resource", () => {
   const testId = `${BRANCH_PREFIX}-ai-token`;
 
@@ -32,7 +46,7 @@ describe("AiSearchToken Resource", () => {
     try {
       // Create an AI Search token
       token = await AiSearchToken("test-token", {
-        name: `${testId}`,
+        name: testId,
       });
 
       expect(token.tokenId).toBeTruthy();
@@ -51,11 +65,21 @@ describe("AiSearchToken Resource", () => {
     } finally {
       await destroy(scope);
 
-      // Verify AI Search token was deleted
+      // Verify AI Search token was deleted. CF's delete is eventually
+      // consistent — poll for up to 60s.
       if (token?.tokenId) {
-        const getDeletedResponse = await api.get(
-          `/accounts/${api.accountId}/ai-search/tokens/${token.tokenId}`,
-        );
+        const capturedTokenId = token.tokenId;
+        const getDeletedResponse = await poll({
+          description: "wait for AI Search token deletion to propagate",
+          fn: () =>
+            api.get(
+              `/accounts/${api.accountId}/ai-search/tokens/${capturedTokenId}`,
+            ),
+          predicate: (res) => res.status === 404,
+          initialDelay: 500,
+          maxDelay: 3000,
+          timeout: 30_000,
+        });
         expect(getDeletedResponse.status).toEqual(404);
       }
     }
@@ -96,10 +120,11 @@ describe("AiSearch Resource", () => {
       expect(aiSearch.type).toEqual("r2");
       expect(aiSearch.source).toEqual(bucketName);
       expect(aiSearch.tokenId).toBeTruthy();
+      expect(aiSearch.namespace).toEqual("default");
       // Note: internalId and vectorizeName may not be immediately available
 
       // Verify instance was created by querying the API directly
-      const instance = await getAiSearchInstance(api, instanceName);
+      const instance = await getAiSearchInstance(api, "default", instanceName);
       expect(instance.id).toEqual(instanceName);
       expect(instance.type).toEqual("r2");
 
@@ -122,18 +147,38 @@ describe("AiSearch Resource", () => {
       expect(aiSearch.scoreThreshold).toEqual(0.5);
       expect(aiSearch.reranking).toEqual(true);
 
-      // Verify instance was updated
-      const updatedInstance = await getAiSearchInstance(api, instanceName);
+      // Verify instance was updated. Cloudflare's instance PUT is
+      // eventually consistent — poll briefly for the new values.
+      const updatedInstance = await poll({
+        description: "wait for AI Search instance PUT to propagate",
+        fn: () => getAiSearchInstance(api, "default", instanceName),
+        predicate: (r) =>
+          r.max_num_results === 20 &&
+          r.score_threshold === 0.5 &&
+          r.reranking === true,
+        initialDelay: 500,
+        maxDelay: 3000,
+        timeout: 30_000,
+      });
       expect(updatedInstance.max_num_results).toEqual(20);
       expect(updatedInstance.score_threshold).toEqual(0.5);
       expect(updatedInstance.reranking).toEqual(true);
     } finally {
       await destroy(scope);
 
-      // Verify instance was deleted
-      const getResponse = await api.get(
-        `/accounts/${api.accountId}/ai-search/instances/${instanceName}`,
-      );
+      // Verify instance was deleted (namespace-scoped endpoint). CF's
+      // delete is eventually consistent — poll until the GET flips to 404.
+      const getResponse = await poll({
+        description: "wait for instance deletion to propagate",
+        fn: () =>
+          api.get(
+            `/accounts/${api.accountId}/ai-search/namespaces/default/instances/${instanceName}`,
+          ),
+        predicate: (res) => res.status === 404,
+        initialDelay: 500,
+        maxDelay: 3000,
+        timeout: 30_000,
+      });
       expect(getResponse.status).toEqual(404);
     }
   });
@@ -165,6 +210,7 @@ describe("AiSearch Resource", () => {
       expect(aiSearch.id).toEqual(instanceName);
       expect(aiSearch.type).toEqual("r2");
       expect(aiSearch.source).toEqual(bucketName);
+      expect(aiSearch.namespace).toEqual("default");
     } finally {
       await destroy(scope);
     }
@@ -173,30 +219,30 @@ describe("AiSearch Resource", () => {
   test("create AI Search with invalid domain", async (scope) => {
     const instanceName = `${testId}-invalid`;
 
-    let aiSearch: AiSearch | undefined;
-
     try {
-      aiSearch = await AiSearch("invalid-search", {
-        name: instanceName,
-        source: {
-          type: "web-crawler",
-          domain: "invalid-domain.com",
-        },
-        adopt: true,
-      });
-    } catch (error) {
-      assert(error instanceof Error);
-      expect(error.message).toContain(
-        "The domain needs to belong to this account.",
-      );
+      // Explicitly assert the Promise rejects with the expected message. The
+      // previous `try/catch` variant silently passed if `AiSearch()` resolved.
+      await expect(
+        AiSearch("invalid-search", {
+          name: instanceName,
+          source: {
+            type: "web-crawler",
+            domain: "invalid-domain.com",
+          },
+          adopt: true,
+        }),
+      ).rejects.toThrow(/The domain needs to belong to this account\./);
     } finally {
       await destroy(scope);
     }
   });
 
   test("create AI Search with R2Bucket shorthand", async (scope) => {
-    const instanceName = `${testId}-shorthand`;
-    const bucketName = `${testId}-shorthand-bucket`;
+    // Keep the suffix short — `${testId}` already uses BRANCH_PREFIX which
+    // varies in length between environments; AI Search instance names are
+    // capped at 32 chars by Cloudflare.
+    const instanceName = `${testId}-sh`;
+    const bucketName = `${testId}-sh-bucket`;
 
     let aiSearch: AiSearch | undefined;
 
@@ -218,6 +264,7 @@ describe("AiSearch Resource", () => {
       expect(aiSearch.type).toEqual("r2");
       expect(aiSearch.source).toEqual(bucketName);
       expect(aiSearch.tokenId).toBeTruthy();
+      expect(aiSearch.namespace).toEqual("default");
     } finally {
       await destroy(scope);
     }
@@ -254,6 +301,7 @@ describe("AiSearch Resource", () => {
 
       expect(aiSearch.id).toEqual(instanceName);
       expect(aiSearch.tokenId).toEqual(token.tokenId);
+      expect(aiSearch.namespace).toEqual("default");
     } finally {
       await destroy(scope);
     }
@@ -293,12 +341,17 @@ describe("AiSearch Resource", () => {
       expect(aiSearch.maxNumResults).toEqual(15);
       expect(aiSearch.scoreThreshold).toEqual(0.3);
       expect(aiSearch.rewriteQuery).toEqual(true);
+      expect(aiSearch.namespace).toEqual("default");
     } finally {
       await destroy(scope);
     }
   });
 
-  test("adopt existing AI Search instance", async (scope) => {
+  test("adopt preserves underlying AiSearch instance (createdAt + internalId stable)", async (scope) => {
+    // Catches silent-recreate regressions: adoption must reuse the same
+    // underlying Cloudflare resource, not destroy-then-recreate. The only
+    // way to reliably prove this is to verify the server-assigned
+    // createdAt and internalId are identical across the two calls.
     const instanceName = `${testId}-adopt`;
     const bucketName = `${testId}-adopt-bucket`;
 
@@ -320,6 +373,8 @@ describe("AiSearch Resource", () => {
       });
 
       expect(aiSearch1.id).toEqual(instanceName);
+      const originalCreatedAt = aiSearch1.createdAt;
+      const originalInternalId = aiSearch1.internalId;
 
       // Create second instance with same name - should adopt
       const aiSearch2 = await AiSearch("adopt-search-2", {
@@ -336,6 +391,12 @@ describe("AiSearch Resource", () => {
       // Should have adopted and updated
       expect(aiSearch2.id).toEqual(instanceName);
       expect(aiSearch2.maxNumResults).toEqual(25);
+      expect(aiSearch2.namespace).toEqual("default");
+      // Adoption preserves the underlying resource: createdAt + internalId
+      // must match the original exactly. If the resource had been silently
+      // recreated, the server would have issued new values.
+      expect(aiSearch2.createdAt).toEqual(originalCreatedAt);
+      expect(aiSearch2.internalId).toEqual(originalInternalId);
     } finally {
       await destroy(scope);
     }
@@ -366,10 +427,10 @@ describe("AiSearch Resource", () => {
       await destroy(scope);
 
       // Instance should still exist
-      const instance = await getAiSearchInstance(api, instanceName);
+      const instance = await getAiSearchInstance(api, "default", instanceName);
       expect(instance.id).toEqual(instanceName);
     } finally {
-      await deleteAiSearchInstance(api, instanceName);
+      await deleteAiSearchInstance(api, "default", instanceName);
     }
   });
 
@@ -382,13 +443,16 @@ describe("AiSearch Resource", () => {
       const workerName = `${testId}-rag-worker`;
 
       try {
-        // 1. Create bucket with test content
+        // 1. Create bucket with test content.
+        // NOTE: `delete: false` (and `empty: true` is intentionally not set)
+        // because AI Search holds a reference to the bucket — attempting
+        // to delete or empty the bucket while an AI Search instance is
+        // indexing it races with the indexing job and flakes CI. We leak
+        // the test buckets into the account; they're cleaned up out-of-band.
         const bucket = await R2Bucket("rag-bucket", {
           name: bucketName,
           adopt: true,
-          // we can't seem to delete a bucket used by AI search
           delete: false,
-          // empty: true, // Empty bucket on deletion since we upload docs
         });
 
         await bucket.put(
@@ -461,25 +525,40 @@ Schedule regular vet checkups and keep vaccinations current.
 
         expect(worker.url).toBeTruthy();
 
-        await new Promise((resolve) => setTimeout(resolve, 2000));
-
-        // 5. Verify RAG response
+        // 5. Verify RAG response. `poll.initialDelay` handles the initial
+        // warm-up (was previously preceded by a bare `setTimeout(2000)` magic
+        // sleep; removed in favor of letting `poll` drive the cadence).
+        // The fetch itself can return HTML error pages (e.g. 404 from a not-
+        // yet-ready worker) — tolerate JSON parse errors as "not ready".
+        type RagResponse = {
+          success: boolean;
+          hasResponse?: boolean;
+          responseLength?: number;
+          sourceCount?: number;
+        };
         const data = await poll({
           description: "wait for AI Search to be ready",
-          fn: async () => {
+          fn: async (): Promise<RagResponse> => {
             const url = new URL(worker.url!);
             url.searchParams.set("q", "installation");
-            const response = await fetch(url);
-            return (await response.json()) as {
-              success: boolean;
-              hasResponse: boolean;
-              responseLength: number;
-              sourceCount: number;
-            };
+            try {
+              const response = await fetch(url);
+              const contentType = response.headers.get("content-type") ?? "";
+              if (!contentType.includes("application/json")) {
+                return { success: false };
+              }
+              return (await response.json()) as RagResponse;
+            } catch {
+              return { success: false };
+            }
           },
-          predicate: (result) => result.success && result.sourceCount > 0,
+          predicate: (result) =>
+            result.success === true && (result.sourceCount ?? 0) > 0,
           initialDelay: 5000,
           maxDelay: 10_000,
+          // Explicit timeout — produces a clearer failure than vitest's
+          // outer test timeout (which just reports "test timed out").
+          timeout: 8 * 60_000,
         });
 
         expect(data.success).toBe(true);
@@ -489,8 +568,541 @@ Schedule regular vet checkups and keep vaccinations current.
         expect(data.sourceCount).toBeGreaterThan(0);
       } finally {
         await destroy(scope);
+
+        // Verify instance was deleted. CF's instance delete is eventually
+        // consistent — same-colo is immediate (edge cache invalidation),
+        // cross-colo is bounded to ~60s (KV TTL).
+        const getResponse = await poll({
+          description: "wait for RAG instance deletion to propagate",
+          fn: () =>
+            api.get(
+              `/accounts/${api.accountId}/ai-search/namespaces/default/instances/${instanceName}`,
+            ),
+          predicate: (res) => res.status === 404,
+          initialDelay: 500,
+          maxDelay: 5000,
+          timeout: 90_000,
+        });
+        expect(getResponse.status).toEqual(404);
       }
     },
     60_000 * 10,
   );
+
+  test("create sourceless AI Search instance (built-in storage)", async (scope) => {
+    const instanceName = `${testId}-nosrc`;
+
+    let aiSearch: AiSearch | undefined;
+
+    try {
+      // Create AI Search instance without a source (built-in storage)
+      aiSearch = await AiSearch("nosrc-search", {
+        name: instanceName,
+        adopt: true,
+      });
+
+      expect(aiSearch.id).toEqual(instanceName);
+      expect(aiSearch.namespace).toEqual("default");
+      // Sourceless instances don't have a user-facing source
+      expect(aiSearch.source).toBeFalsy();
+
+      // Verify instance was created
+      const instance = await getAiSearchInstance(api, "default", instanceName);
+      expect(instance.id).toEqual(instanceName);
+      expect(instance.source).toBeFalsy();
+    } finally {
+      await destroy(scope);
+    }
+  });
+
+  test("create AI Search instance in custom namespace", async (scope) => {
+    const namespaceName = `${testId}-ns`;
+    const instanceName = `${testId}-ns-inst`;
+
+    try {
+      // Create a namespace
+      const ns = await AiSearchNamespace("test-ns", {
+        name: namespaceName,
+        adopt: true,
+      });
+
+      expect(ns.namespace).toEqual(namespaceName);
+      expect(ns.type).toEqual("ai_search_namespace");
+
+      // Create instance in that namespace
+      const aiSearch = await AiSearch("ns-search", {
+        name: instanceName,
+        namespace: ns,
+        adopt: true,
+      });
+
+      expect(aiSearch.id).toEqual(instanceName);
+      expect(aiSearch.namespace).toEqual(namespaceName);
+
+      // Verify instance exists in the namespace
+      const instance = await getAiSearchInstance(
+        api,
+        namespaceName,
+        instanceName,
+      );
+      expect(instance.id).toEqual(instanceName);
+    } finally {
+      await destroy(scope);
+
+      // Clean up namespace (should be empty after instance deletion)
+      await deleteAiSearchNamespace(api, namespaceName);
+    }
+  });
+});
+
+describe("AiSearchNamespace Resource", () => {
+  const testId = `${BRANCH_PREFIX}-ai-ns`;
+
+  test("create and delete AI Search namespace", async (scope) => {
+    const namespaceName = `${testId}-crud`;
+
+    try {
+      const ns = await AiSearchNamespace("crud-ns", {
+        name: namespaceName,
+        description: "Test namespace",
+      });
+
+      expect(ns.type).toEqual("ai_search_namespace");
+      expect(ns.namespace).toEqual(namespaceName);
+      expect(ns.description).toEqual("Test namespace");
+      expect(ns.createdAt).toBeTruthy();
+
+      // Verify namespace was created by querying the API directly
+      const existing = await getAiSearchNamespace(api, namespaceName);
+      expect(existing).toBeTruthy();
+      expect(existing!.name).toEqual(namespaceName);
+    } finally {
+      await destroy(scope);
+
+      // Verify namespace was deleted. Cloudflare's namespace delete is
+      // eventually consistent — poll briefly until the GET returns
+      // `undefined` (helper maps 404 → undefined) before asserting.
+      const deleted = await poll({
+        description: "wait for namespace deletion to propagate",
+        fn: () => getAiSearchNamespace(api, namespaceName),
+        predicate: (r) => r === undefined,
+        initialDelay: 500,
+        maxDelay: 3000,
+        timeout: 30_000,
+      });
+      expect(deleted).toBeUndefined();
+    }
+  });
+
+  test("adopt existing AI Search namespace", async (scope) => {
+    const namespaceName = `${testId}-adopt`;
+
+    try {
+      // Create initial namespace
+      const ns1 = await AiSearchNamespace("adopt-ns-1", {
+        name: namespaceName,
+      });
+
+      expect(ns1.namespace).toEqual(namespaceName);
+
+      // Create second namespace with same name - should adopt
+      const ns2 = await AiSearchNamespace("adopt-ns-2", {
+        name: namespaceName,
+        description: "Adopted namespace",
+        adopt: true,
+      });
+
+      expect(ns2.namespace).toEqual(namespaceName);
+      expect(ns2.description).toEqual("Adopted namespace");
+    } finally {
+      await destroy(scope);
+
+      // Clean up
+      await deleteAiSearchNamespace(api, namespaceName);
+    }
+  });
+
+  test("adopt preserves underlying resource (createdAt match)", async (scope) => {
+    const namespaceName = `${testId}-av`;
+
+    try {
+      // Create initial namespace, capture createdAt
+      const ns1 = await AiSearchNamespace("adopt-verify-1", {
+        name: namespaceName,
+      });
+      expect(ns1.namespace).toEqual(namespaceName);
+      const originalCreatedAt = ns1.createdAt;
+
+      // Second create with adopt: true — should adopt the SAME underlying namespace,
+      // not create a new one. The createdAt must remain identical.
+      const ns2 = await AiSearchNamespace("adopt-verify-2", {
+        name: namespaceName,
+        adopt: true,
+      });
+
+      expect(ns2.namespace).toEqual(namespaceName);
+      expect(ns2.createdAt).toEqual(originalCreatedAt);
+    } finally {
+      await destroy(scope);
+      await deleteAiSearchNamespace(api, namespaceName);
+    }
+  });
+
+  test("rename triggers replace (old deleted, new created)", async (scope) => {
+    const originalName = `${testId}-ra`;
+    const renamedName = `${testId}-rb`;
+
+    try {
+      // Create namespace with initial name
+      const ns1 = await AiSearchNamespace("rename-ns", {
+        name: originalName,
+      });
+      expect(ns1.namespace).toEqual(originalName);
+      await scope.finalize();
+
+      // Verify initial namespace exists
+      const initialExists = await getAiSearchNamespace(api, originalName);
+      expect(initialExists).toBeTruthy();
+
+      // Rename — triggers this.replace()
+      const ns2 = await AiSearchNamespace("rename-ns", {
+        name: renamedName,
+      });
+      expect(ns2.namespace).toEqual(renamedName);
+      await scope.finalize();
+
+      // Original must be gone, new one present. The delete fires during
+      // scope.finalize() (pending-deletion flush), but CF's namespace
+      // delete is eventually consistent — poll briefly.
+      const oldExists = await poll({
+        description: "wait for old namespace deletion to propagate",
+        fn: () => getAiSearchNamespace(api, originalName),
+        predicate: (r) => r === undefined,
+        initialDelay: 500,
+        maxDelay: 3000,
+        timeout: 30_000,
+      });
+      expect(oldExists).toBeUndefined();
+      const newExists = await getAiSearchNamespace(api, renamedName);
+      expect(newExists).toBeTruthy();
+    } finally {
+      await destroy(scope);
+      // Cleanup both just in case
+      await deleteAiSearchNamespace(api, originalName).catch(ignore404);
+      await deleteAiSearchNamespace(api, renamedName).catch(ignore404);
+    }
+  });
+
+  test("description round-trips through the API (set → update → clear with null)", async (scope) => {
+    // Covers the three-way semantics on `description`:
+    //   - absent (undefined)  → do not touch
+    //   - string              → set
+    //   - null                → clear
+    const namespaceName = `${testId}-desc`;
+
+    try {
+      // (1) Create with an initial description
+      const ns1 = await AiSearchNamespace("desc-ns", {
+        name: namespaceName,
+        description: "initial description",
+      });
+      expect(ns1.description).toEqual("initial description");
+
+      // Verify via API read that it was persisted server-side, not just
+      // mirrored in Alchemy output.
+      const apiView1 = await getAiSearchNamespace(api, namespaceName);
+      expect(apiView1?.description).toEqual("initial description");
+
+      // (2) Update with a new description — must PUT.
+      const ns2 = await AiSearchNamespace("desc-ns", {
+        name: namespaceName,
+        description: "updated description",
+      });
+      expect(ns2.description).toEqual("updated description");
+
+      // Cloudflare's namespace PUT is eventually consistent — poll briefly
+      // until the GET surfaces the new value before asserting.
+      const apiView2 = await poll({
+        description: "wait for namespace description update to propagate",
+        fn: () => getAiSearchNamespace(api, namespaceName),
+        predicate: (r) => r?.description === "updated description",
+        initialDelay: 500,
+        maxDelay: 2000,
+        timeout: 15_000,
+      });
+      expect(apiView2?.description).toEqual("updated description");
+
+      // (3) Clear by passing null explicitly.
+      const ns3 = await AiSearchNamespace("desc-ns", {
+        name: namespaceName,
+        description: null,
+      });
+      expect(ns3.description).toBeNull();
+
+      const apiView3 = await poll({
+        description: "wait for namespace description clear to propagate",
+        fn: () => getAiSearchNamespace(api, namespaceName),
+        // API surfaces cleared description as null or empty string — both OK.
+        predicate: (r) => !r?.description,
+        initialDelay: 500,
+        maxDelay: 2000,
+        timeout: 15_000,
+      });
+      expect(apiView3?.description ?? null).toBeFalsy();
+    } finally {
+      await destroy(scope);
+      await deleteAiSearchNamespace(api, namespaceName).catch(ignore404);
+    }
+  });
+
+  test("adopt on reserved default namespace binds without create", async (scope) => {
+    // The `default` namespace is reserved by Cloudflare — create/update/
+    // delete via the API all fail. Alchemy must bind to it via `adopt: true`
+    // without issuing any CREATE request, and destroy must NOT attempt to
+    // delete it.
+    const ns = await AiSearchNamespace("default-adoption", {
+      name: "default",
+      adopt: true,
+    });
+    expect(ns.namespace).toEqual("default");
+    expect(ns.type).toEqual("ai_search_namespace");
+
+    // Destroy must be a no-op for the default namespace (the helper
+    // skips it silently). If this throws, the implementation is attempting
+    // an illegal DELETE and we want the test to fail loudly.
+    await destroy(scope);
+  });
+
+  test("rejects names that violate Cloudflare's character rules", async (scope) => {
+    // Local validation catches bad names before any API call. This test
+    // locks in the documented regex: ^[a-z0-9]([a-z0-9-]{0,26}[a-z0-9])?$
+    try {
+      await expect(
+        AiSearchNamespace("bad-start", { name: "-leading-hyphen" }),
+      ).rejects.toThrow(/invalid/i);
+
+      await expect(
+        AiSearchNamespace("bad-end", { name: "trailing-hyphen-" }),
+      ).rejects.toThrow(/invalid/i);
+
+      await expect(
+        AiSearchNamespace("bad-upper", { name: "HasUppercase" }),
+      ).rejects.toThrow(/invalid/i);
+    } finally {
+      await destroy(scope);
+    }
+  });
+
+  test("delete=false preserves namespace on scope destroy", async (scope) => {
+    const namespaceName = `${testId}-nd`;
+
+    try {
+      await AiSearchNamespace("nodelete-ns", {
+        name: namespaceName,
+        delete: false,
+      });
+
+      // Destroy scope — namespace should still exist
+      await destroy(scope);
+
+      const stillExists = await getAiSearchNamespace(api, namespaceName);
+      expect(stillExists).toBeTruthy();
+      expect(stillExists!.name).toEqual(namespaceName);
+    } finally {
+      // Manual cleanup (delete: false means scope destroy didn't remove it)
+      await deleteAiSearchNamespace(api, namespaceName);
+    }
+  });
+});
+
+describe("AiSearch namespace + binding integration", () => {
+  const testId = `${BRANCH_PREFIX}-bnd`;
+
+  test("sourceless instance update changes maxNumResults without replacing the instance", async (scope) => {
+    const instanceName = `${testId}-srcupd`;
+
+    try {
+      // Create sourceless instance
+      let aiSearch = await AiSearch("srcless-upd", {
+        name: instanceName,
+        maxNumResults: 10,
+        adopt: true,
+      });
+      expect(aiSearch.maxNumResults).toEqual(10);
+      // Alchemy must not auto-create a service token for sourceless instances
+      // (the API may still surface an internal default token_id — that's fine).
+      expect(aiSearch.source).toBeFalsy();
+
+      const initialInternalId = aiSearch.internalId;
+
+      // Update maxNumResults — must not trigger a replace (internalId stable)
+      aiSearch = await AiSearch("srcless-upd", {
+        name: instanceName,
+        maxNumResults: 25,
+        adopt: true,
+      });
+      expect(aiSearch.maxNumResults).toEqual(25);
+      expect(aiSearch.source).toBeFalsy();
+      expect(aiSearch.internalId).toEqual(initialInternalId);
+
+      // Verify on the API
+      const instance = await getAiSearchInstance(api, "default", instanceName);
+      expect(instance.max_num_results).toEqual(25);
+      expect(instance.source).toBeFalsy();
+    } finally {
+      await destroy(scope);
+      // Verify gone. Cloudflare's delete endpoint is eventually consistent —
+      // poll briefly until the GET flips to 404 before failing the test.
+      const after = await poll({
+        description: "wait for instance deletion to propagate",
+        fn: () =>
+          api.get(
+            `/accounts/${api.accountId}/ai-search/namespaces/default/instances/${instanceName}`,
+          ),
+        predicate: (res) => res.status === 404,
+        initialDelay: 500,
+        maxDelay: 3000,
+        timeout: 30_000,
+      });
+      expect(after.status).toEqual(404);
+    }
+  });
+
+  test("changing namespace on an existing instance triggers replace", async (scope) => {
+    // Covers the critical path where a user moves an AI Search instance
+    // from one namespace to another. Because namespace is immutable on the
+    // CF side, Alchemy must delete the old instance and create a new one
+    // (rather than silently attempting an in-place PUT against the new
+    // namespace and leaking the old instance).
+    const namespaceName = `${testId}-mvns`;
+    const instanceName = `${testId}-mvinst`;
+
+    try {
+      await AiSearchNamespace("mv-ns", {
+        name: namespaceName,
+        adopt: true,
+      });
+
+      // Create in default namespace first
+      const first = await AiSearch("mv-inst", {
+        name: instanceName,
+        adopt: true,
+      });
+      expect(first.namespace).toEqual("default");
+      await scope.finalize();
+
+      const inDefault = await getAiSearchInstance(api, "default", instanceName);
+      expect(inDefault.id).toEqual(instanceName);
+
+      // Move to custom namespace — must trigger this.replace()
+      const second = await AiSearch("mv-inst", {
+        name: instanceName,
+        namespace: namespaceName,
+        adopt: true,
+      });
+      expect(second.namespace).toEqual(namespaceName);
+      await scope.finalize();
+
+      // Old (default) must be gone; new (custom ns) must exist. Delete is
+      // eventually consistent — poll for the old instance to vanish.
+      const oldGone = await poll({
+        description: "wait for old instance deletion to propagate",
+        fn: () =>
+          getAiSearchInstance(api, "default", instanceName).catch((e) =>
+            e?.status === 404 ? undefined : Promise.reject(e),
+          ),
+        predicate: (r) => r === undefined,
+        initialDelay: 500,
+        maxDelay: 3000,
+        timeout: 30_000,
+      });
+      expect(oldGone).toBeUndefined();
+
+      const newInstance = await getAiSearchInstance(
+        api,
+        namespaceName,
+        instanceName,
+      );
+      expect(newInstance.id).toEqual(instanceName);
+    } finally {
+      await deleteAiSearchInstance(api, "default", instanceName).catch(
+        ignore404,
+      );
+      await deleteAiSearchInstance(api, namespaceName, instanceName).catch(
+        ignore404,
+      );
+      await destroy(scope).catch(ignore404);
+      await deleteAiSearchNamespace(api, namespaceName).catch(ignore404);
+    }
+  });
+
+  test("namespace prop accepts a string (not just a Resource)", async (scope) => {
+    const namespaceName = `${testId}-sns`;
+    const instanceName = `${testId}-sinst`;
+
+    try {
+      // Pre-create the namespace since AiSearch doesn't create it for us
+      await AiSearchNamespace("str-ns", {
+        name: namespaceName,
+        adopt: true,
+      });
+
+      // Use the namespace as a plain string
+      const aiSearch = await AiSearch("str-inst", {
+        name: instanceName,
+        namespace: namespaceName, // string, not a Resource
+        adopt: true,
+      });
+
+      expect(aiSearch.namespace).toEqual(namespaceName);
+
+      // Verify on the API (namespace-scoped endpoint)
+      const instance = await getAiSearchInstance(
+        api,
+        namespaceName,
+        instanceName,
+      );
+      expect(instance.id).toEqual(instanceName);
+    } finally {
+      await destroy(scope);
+      await deleteAiSearchNamespace(api, namespaceName);
+    }
+  });
+
+  test("single-instance binding rejects non-default namespace at deploy time", async (scope) => {
+    const namespaceName = `${testId}-rjns`;
+    const instanceName = `${testId}-rjinst`;
+    const workerName = `${testId}-rjwkr`;
+
+    try {
+      const ns = await AiSearchNamespace("reject-ns", {
+        name: namespaceName,
+        adopt: true,
+      });
+
+      // Instance in a custom namespace
+      const aiSearch = await AiSearch("reject-inst", {
+        name: instanceName,
+        namespace: ns,
+        adopt: true,
+      });
+      expect(aiSearch.namespace).toEqual(namespaceName);
+
+      // Attempt to bind it as a single-instance binding — must fail
+      await expect(
+        Worker(workerName, {
+          name: workerName,
+          adopt: true,
+          script: "export default { fetch() { return new Response('hi'); } };",
+          format: "esm",
+          bindings: {
+            SEARCH: aiSearch, // ← single-instance binding, but namespace isn't "default"
+          },
+        }),
+      ).rejects.toThrow(/single-instance AiSearch binding/);
+    } finally {
+      await destroy(scope);
+      await deleteAiSearchNamespace(api, namespaceName);
+    }
+  });
 });

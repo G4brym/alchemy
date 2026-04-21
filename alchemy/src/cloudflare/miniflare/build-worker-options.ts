@@ -4,6 +4,8 @@ import { assertNever } from "../../util/assert-never.ts";
 import { reservePort } from "../../util/find-open-port.ts";
 import type { HTTPServer } from "../../util/http.ts";
 import { logger } from "../../util/logger.ts";
+import { isAiSearchNamespace } from "../ai-search-namespace.ts";
+import { isAiSearch } from "../ai-search.ts";
 import type { CloudflareApi } from "../api.ts";
 import type {
   Binding,
@@ -38,6 +40,8 @@ type RemoteBinding =
       {
         type:
           | "ai"
+          | "ai_search"
+          | "ai_search_namespace"
           | "browser"
           | "dispatch_namespace"
           | "mtls_certificate"
@@ -88,6 +92,29 @@ export const buildWorkerOptions = async (
   for (const [key, binding] of Object.entries(input.bindings ?? {})) {
     if (typeof binding === "string") {
       (options.bindings ??= {})[key] = binding;
+      continue;
+    }
+    if (isAiSearch(binding)) {
+      // AI Search instance bindings are not supported natively by Miniflare;
+      // proxy them to the deployed instance (same mechanism used by `ai`,
+      // `vectorize`, etc.). Instance bindings are always scoped to the
+      // default namespace on the CF side, so the namespace need not be
+      // surfaced in the remote-proxy metadata.
+      remoteBindings.push({
+        type: "ai_search",
+        name: key,
+        instance_name: binding.name,
+        raw: true,
+      });
+      continue;
+    }
+    if (isAiSearchNamespace(binding)) {
+      remoteBindings.push({
+        type: "ai_search_namespace",
+        name: key,
+        namespace: binding.namespace,
+        raw: true,
+      });
       continue;
     }
     if (binding.type === "cloudflare::Worker::Self") {
@@ -524,6 +551,18 @@ export const buildWorkerOptions = async (
         case "vpc_service":
           (options.vpcServices ??= {})[binding.name] = {
             service_id: binding.service_id,
+            remoteProxyConnectionString: remoteProxy.connectionString,
+          };
+          break;
+        case "ai_search":
+          (options.aiSearchInstances ??= {})[binding.name] = {
+            instance_name: binding.instance_name,
+            remoteProxyConnectionString: remoteProxy.connectionString,
+          };
+          break;
+        case "ai_search_namespace":
+          (options.aiSearchNamespaces ??= {})[binding.name] = {
+            namespace: binding.namespace,
             remoteProxyConnectionString: remoteProxy.connectionString,
           };
           break;

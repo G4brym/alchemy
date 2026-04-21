@@ -4,6 +4,7 @@ export * from "./account-api-token.ts";
 export * from "./account-id.ts";
 export * from "./ai-crawler.ts";
 export * from "./ai-gateway.ts";
+export * from "./ai-search-namespace.ts";
 export * from "./ai-search-token.ts";
 export * from "./ai-search.ts";
 export * from "./ai.ts";

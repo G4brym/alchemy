@@ -6,6 +6,7 @@
     { "path": "./alchemy/tsconfig.test.json" },
     { "path": "./stacks/tsconfig.json" },
     { "path": "./examples/aws-app/tsconfig.json" },
+    { "path": "./examples/cloudflare-ai-search/tsconfig.json" },
     { "path": "./examples/cloudflare-astro/tsconfig.json" },
     { "path": "./examples/cloudflare-container/tsconfig.json" },
     { "path": "./examples/cloudflare-durable-object-websocket/tsconfig.json" },

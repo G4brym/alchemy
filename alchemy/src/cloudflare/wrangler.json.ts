@@ -6,6 +6,8 @@ import { Resource } from "../resource.ts";
 import { Scope } from "../scope.ts";
 import { isSecret } from "../secret.ts";
 import { assertNever } from "../util/assert-never.ts";
+import { isAiSearchNamespace } from "./ai-search-namespace.ts";
+import { isAiSearch } from "./ai-search.ts";
 import { createCloudflareApi } from "./api.ts";
 import type { Bindings } from "./bindings.ts";
 import { getCloudflareRegistryWithAccountNamespace } from "./container.ts";
@@ -289,6 +291,8 @@ async function processBindings(
   const containers: WranglerJsonConfig["containers"] = [];
   const workerLoaders: WranglerJsonConfig["worker_loaders"] = [];
   const vpcServices: WranglerJsonConfig["vpc_services"] = [];
+  const aiSearchInstances: WranglerJsonConfig["ai_search"] = [];
+  const aiSearchNamespaces: WranglerJsonConfig["ai_search_namespaces"] = [];
 
   for (const eventSource of eventSources ?? []) {
     if (isQueueEventSource(eventSource)) {
@@ -321,6 +325,26 @@ async function processBindings(
     } else if (writeSecrets && isSecret(binding)) {
       spec.vars ??= {};
       spec.vars[bindingName] = binding as any;
+    } else if (isAiSearch(binding)) {
+      // AI Search discriminates via ResourceKind (isAiSearch) rather than
+      // binding.type — `AiSearch.type` is the *source* type ("r2" |
+      // "web-crawler") and so would collide with `r2_bucket` string
+      // matching below. Checking here at the top of the chain mirrors the
+      // ordering in worker-metadata.ts.
+      aiSearchInstances.push({
+        binding: bindingName,
+        instance_name: binding.name,
+        // AI Search is not natively supported by Miniflare — emitting
+        // `remote: true` lets `wrangler dev` proxy to the deployed
+        // instance (matches vectorize / browser / ai / vpc_service).
+        remote: true,
+      });
+    } else if (isAiSearchNamespace(binding)) {
+      aiSearchNamespaces.push({
+        binding: bindingName,
+        namespace: binding.namespace,
+        remote: true,
+      });
     } else if (binding.type === "cloudflare::Worker::Self") {
       // Self(service) binding
       services.push({
@@ -645,5 +669,13 @@ async function processBindings(
 
   if (workerLoaders.length > 0) {
     spec.worker_loaders = workerLoaders;
+  }
+
+  if (aiSearchInstances.length > 0) {
+    spec.ai_search = aiSearchInstances;
+  }
+
+  if (aiSearchNamespaces.length > 0) {
+    spec.ai_search_namespaces = aiSearchNamespaces;
   }
 }

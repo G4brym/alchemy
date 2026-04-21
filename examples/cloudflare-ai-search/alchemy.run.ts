@@ -1,5 +1,11 @@
 import alchemy from "alchemy";
-import { Ai, AiSearch, R2Bucket, Worker } from "alchemy/cloudflare";
+import {
+  Ai,
+  AiSearch,
+  AiSearchNamespace,
+  R2Bucket,
+  Worker,
+} from "alchemy/cloudflare";
 
 export const app = await alchemy("cloudflare-ai-search");
 
@@ -35,13 +41,23 @@ const search = await AiSearch("search", {
   adopt: true,
 });
 
-await bucket.list().then((list) => {
-  console.log(list.objects.map((o) => o.key));
+// Create a namespace for dynamic instance access. Omitting `name` lets
+// Alchemy derive a stage-scoped physical name (`${app}-${stage}-docs`) so
+// concurrent stage/branch deploys don't collide on a single global name.
+const ns = await AiSearchNamespace("docs", {
+  adopt: true,
 });
+
+const list = await bucket.list();
+console.log(list.objects.map((o) => o.key));
 
 export const worker = await Worker("worker", {
   entrypoint: "src/worker.ts",
   bindings: {
+    // New: AI Search bindings (recommended)
+    SEARCH: search, // Single instance binding (ai_search)
+    DOCS: ns, // Namespace binding (ai_search_namespaces)
+    // Legacy: AI binding with autorag() (still works)
     AI: Ai(),
     RAG_ID: search.id,
   },

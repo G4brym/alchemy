@@ -1,5 +1,5 @@
 import type { Context } from "../context.ts";
-import { Resource } from "../resource.ts";
+import { Resource, ResourceKind } from "../resource.ts";
 import { logger } from "../util/logger.ts";
 import { poll } from "../util/poll.ts";
 import { sleep } from "../util/sleep.ts";
@@ -7,6 +7,10 @@ import {
   snakeToCamelObjectDeep,
   type SnakeToCamel,
 } from "../util/snake-to-camel.ts";
+import {
+  type AiSearchNamespace,
+  isAiSearchNamespace,
+} from "./ai-search-namespace.ts";
 import { AiSearchToken } from "./ai-search-token.ts";
 import { CloudflareApiError, isCloudflareApiError } from "./api-error.ts";
 import {
@@ -37,9 +41,49 @@ interface BaseAiSearchProps extends CloudflareApiOptions {
 
   /**
    * Data source for indexing.
-   * Can be an R2Bucket directly, an R2 source config, or a web crawler config.
+   *
+   * Accepts three forms:
+   * - **R2Bucket (shorthand)**: pass an `R2Bucket` resource directly for
+   *   default indexing. `prefix`, `includePaths`, and `excludePaths` cannot
+   *   be set in this form — use the full R2 config form below.
+   * - **R2 config**: `{ type: "r2", bucket, prefix?, includePaths?, excludePaths?, jurisdiction? }`.
+   * - **Web crawler**: `{ type: "web-crawler", domain, ... }`.
+   *
+   * When omitted, creates a built-in storage instance for manual file uploads
+   * (via the Items API or the AI Search binding).
    */
-  source: R2Bucket | AiSearchR2Source | AiSearchWebCrawlerSource;
+  source?: R2Bucket | AiSearchR2Source | AiSearchWebCrawlerSource;
+
+  /**
+   * The namespace this instance belongs to.
+   * Can be a namespace name string or an AiSearchNamespace resource.
+   *
+   * @remarks
+   * Single-instance Worker bindings (`bindings: { MY: aiSearch }`) can only
+   * bind instances in the `default` namespace. To bind instances in a
+   * non-default namespace, use an `AiSearchNamespace` binding instead and
+   * access the instance via `env.NS.get(name)`.
+   *
+   * Changing `namespace` on an existing instance triggers a replace
+   * (delete + create) because namespaces are immutable on the Cloudflare
+   * side.
+   *
+   * @default "default"
+   */
+  namespace?: string | AiSearchNamespace;
+
+  /**
+   * Controls which storage backends are used during indexing.
+   * Defaults to vector-only. Set both `vector` and `keyword` to `true` for hybrid search.
+   */
+  indexMethod?: { vector?: boolean; keyword?: boolean };
+
+  /**
+   * Fusion method for combining vector and keyword results.
+   *
+   * @default "rrf"
+   */
+  fusionMethod?: "max" | "rrf";
 
   /**
    * Text generation model for AI responses
@@ -142,7 +186,8 @@ interface BaseAiSearchProps extends CloudflareApiOptions {
   metadata?: Record<string, unknown>;
 
   /**
-   * Whether to index the source documents when the AI Search instance is created
+   * Whether to index the source documents when the AI Search instance is created.
+   * Only applicable when a source is provided.
    * @default true
    */
   indexOnCreate?: boolean;
@@ -249,13 +294,73 @@ export interface AiSearchWebCrawlerSource {
   };
 }
 
+/**
+ * Type guard for AiSearch
+ */
+export function isAiSearch(resource: unknown): resource is AiSearch {
+  return (
+    typeof resource === "object" &&
+    resource !== null &&
+    (resource as any)[ResourceKind] === "cloudflare::AiSearch"
+  );
+}
+
 export type AiSearch = SnakeToCamel<AiSearch.ApiResponse> & {
   /**
-   * The name of the AI Search instance (this is an alias for the `id` property)
+   * The instance name on the Cloudflare side. Equal to `id`. This is what
+   * gets emitted as `instance_name` in single-instance `ai_search` bindings.
    */
   name: string;
+
+  /**
+   * The namespace this instance belongs to.
+   *
+   * Optional for backwards compatibility with state files that predate
+   * namespace support; at write-time this is always populated (defaults to
+   * `"default"` when the user did not specify a namespace).
+   */
+  namespace?: string;
 };
 
+/**
+ * An AI Search instance: a managed search index with optional built-in
+ * storage and optional external data source (R2 or web crawler).
+ *
+ * @see https://developers.cloudflare.com/ai-search/
+ *
+ * @example
+ * ## Built-in storage (no source)
+ *
+ * Creates an instance whose content is uploaded directly via the items API.
+ *
+ * ```ts
+ * const kb = await AiSearch("knowledge-base", {
+ *   name: "knowledge-base",
+ * });
+ * ```
+ *
+ * @example
+ * ## R2-backed instance
+ *
+ * ```ts
+ * const bucket = await R2Bucket("docs");
+ * const search = await AiSearch("docs-search", {
+ *   name: "docs-search",
+ *   source: bucket,
+ * });
+ * ```
+ *
+ * @example
+ * ## Instance in a custom namespace
+ *
+ * ```ts
+ * const ns = await AiSearchNamespace("tenants", { name: "tenants" });
+ * const search = await AiSearch("tenant-a", {
+ *   name: "tenant-a",
+ *   namespace: ns,
+ * });
+ * ```
+ */
 export const AiSearch = Resource(
   "cloudflare::AiSearch",
   async function (
@@ -263,8 +368,38 @@ export const AiSearch = Resource(
     id: string,
     props: AiSearchProps,
   ): Promise<AiSearch> {
-    const api = await createCloudflareApi(props);
     const adopt = props.adopt ?? this.scope.adopt;
+
+    // Resolve namespace: AiSearchNamespace resource → string, default to "default"
+    const namespace = resolveNamespace(props.namespace);
+
+    if (this.scope.local) {
+      // Local development mode — return a mock shape so `alchemy dev` does
+      // not hit the real Cloudflare API. Matches the AiSearchNamespace
+      // local-mode pattern and satisfies AGENTS.md requirements.
+      const name =
+        props.name ??
+        this.output?.name ??
+        this.scope.createPhysicalName(id, "-", 32);
+      const now = new Date().toISOString();
+      // `AiSearch` is `SnakeToCamel<ApiResponse>` intersected with extras —
+      // all non-required fields are optional, so we only populate what's
+      // needed. No `as unknown as` escape hatch required.
+      const mock: AiSearch = {
+        id: name,
+        name,
+        namespace,
+        accountId: "local",
+        accountTag: "local",
+        createdAt: now,
+        internalId: name,
+        modifiedAt: now,
+        vectorizeName: "",
+      };
+      return mock;
+    }
+
+    const api = await createCloudflareApi(props);
 
     const validateBucketSource = async (
       bucket: R2Bucket | string,
@@ -288,16 +423,25 @@ export const AiSearch = Resource(
         await getBucket(api, name, { jurisdiction });
       } catch (error) {
         throw new Error(
-          `Failed to validate R2 bucket "${name}" (${jurisdiction}) for AI search "${id}": ${error instanceof Error ? error.message : String(error)}`,
+          `Failed to validate R2 bucket "${name}" (${jurisdiction}) for AI search "${id}": ${
+            error instanceof Error ? error.message : String(error)
+          }`,
           { cause: error },
         );
       }
     };
     const normalizeSource = async (
-      source: R2Bucket | AiSearchR2Source | AiSearchWebCrawlerSource,
+      source:
+        | R2Bucket
+        | AiSearchR2Source
+        | AiSearchWebCrawlerSource
+        | undefined,
     ): Promise<
-      (AiSearchR2Source & { bucket: string }) | AiSearchWebCrawlerSource
+      | (AiSearchR2Source & { bucket: string })
+      | AiSearchWebCrawlerSource
+      | undefined
     > => {
+      if (!source) return undefined;
       if (isBucket(source)) {
         await validateBucketSource(source, source.jurisdiction);
         return {
@@ -334,14 +478,34 @@ export const AiSearch = Resource(
         );
       }
     };
-    const normalizeTokenId = async (): Promise<string> => {
+    /**
+     * Only resolve token for R2 sources. Web-crawler and built-in storage
+     * instances do not require a token.
+     */
+    const normalizeTokenId = async (
+      source:
+        | (AiSearchR2Source & { bucket: string })
+        | AiSearchWebCrawlerSource
+        | undefined,
+    ): Promise<string | undefined> => {
+      // Token only needed for R2 sources
+      if (!source || source.type !== "r2") {
+        return undefined;
+      }
       if ("tokenId" in props) {
         validateTokenId(props.tokenId);
         return props.tokenId;
-      } else if (props.token) {
+      } else if ("token" in props && props.token) {
         validateTokenId(props.token.tokenId);
         return props.token.tokenId;
       } else {
+        // Auto-created tokens are an implementation detail of this resource —
+        // `adopt: true` so updates reuse a prior auto-created token with the
+        // same stable child id. We forward `delete: false` when the user
+        // preserves the instance, because Cloudflare rejects token deletion
+        // while the token is still referenced by the preserved instance
+        // (error 7076 `token_in_use_by_instances`). When the instance IS
+        // being deleted normally, the token deletes with it.
         const token = await AiSearchToken("token", {
           baseUrl: props.baseUrl,
           profile: props.profile,
@@ -349,8 +513,8 @@ export const AiSearch = Resource(
           apiToken: props.apiToken,
           accountId: props.accountId,
           email: props.email,
-          adopt: props.adopt,
-          delete: props.delete,
+          adopt: true,
+          ...(props.delete === false ? { delete: false } : {}),
         });
         return token.tokenId;
       }
@@ -358,8 +522,11 @@ export const AiSearch = Resource(
 
     if (this.phase === "delete") {
       if (props.delete !== false && this.output?.id) {
-        await deleteIndex(api, this.output.vectorizeName);
-        await deleteAiSearchInstance(api, this.output.id);
+        if (this.output.vectorizeName) {
+          await deleteIndex(api, this.output.vectorizeName);
+        }
+        const deleteNs = this.output.namespace ?? "default";
+        await deleteAiSearchInstance(api, deleteNs, this.output.id);
       }
       return this.destroy();
     }
@@ -370,35 +537,40 @@ export const AiSearch = Resource(
         `AI Search instance name must be 1-32 characters, got ${name.length} ("${name}")`,
       );
     }
-    const [source, tokenId] = await Promise.all([
-      normalizeSource(props.source),
-      normalizeTokenId(),
-    ]);
+
+    const source = await normalizeSource(props.source);
+    const tokenId = await normalizeTokenId(source);
 
     const payload: AiSearch.ApiPayload = {
       id: name,
-      source: source.type === "r2" ? source.bucket : source.domain,
-      type: source.type,
+      source: source
+        ? source.type === "r2"
+          ? source.bucket
+          : source.domain
+        : undefined,
+      type: source?.type,
       ai_search_model: props.aiSearchModel,
-      source_params: {
-        include_items: source.includePaths,
-        exclude_items: source.excludePaths,
-        ...(source.type === "r2"
-          ? {
-              r2_jurisdiction:
-                source.jurisdiction !== "default"
-                  ? source.jurisdiction
-                  : undefined,
-              prefix: source.prefix,
-            }
-          : {
-              web_crawler: {
-                parse_type: source.parseType,
-                parse_options: source.parseOptions,
-                store_options: source.storeOptions,
-              },
-            }),
-      },
+      source_params: source
+        ? {
+            include_items: source.includePaths,
+            exclude_items: source.excludePaths,
+            ...(source.type === "r2"
+              ? {
+                  r2_jurisdiction:
+                    source.jurisdiction !== "default"
+                      ? source.jurisdiction
+                      : undefined,
+                  prefix: source.prefix,
+                }
+              : {
+                  web_crawler: {
+                    parse_type: source.parseType,
+                    parse_options: source.parseOptions,
+                    store_options: source.storeOptions,
+                  },
+                }),
+          }
+        : undefined,
       embedding_model: props.embeddingModel,
       chunk: props.chunk,
       chunk_size: props.chunkSize,
@@ -413,6 +585,8 @@ export const AiSearch = Resource(
       cache_threshold: props.cacheThreshold,
       metadata: props.metadata,
       token_id: tokenId,
+      index_method: props.indexMethod,
+      fusion_method: props.fusionMethod,
     };
 
     let instance: AiSearch.ApiResponse;
@@ -431,29 +605,73 @@ export const AiSearch = Resource(
           (payload.type === "web-crawler" &&
             "sourceDomain" in this.output &&
             payload.source !== this.output.sourceDomain));
-      if (replace || replaceLegacy) {
+      // Namespace is immutable: moving an instance between namespaces must
+      // replace (delete old, create new) rather than attempt an in-place
+      // update against a non-existent `PUT /namespaces/{new}/instances/{id}`.
+      // Default to "default" for legacy state files that predate the
+      // namespace prop.
+      const currentNamespace =
+        ("namespace" in this.output && this.output.namespace) || "default";
+      const namespaceChanged = currentNamespace !== namespace;
+      if (replace || replaceLegacy || namespaceChanged) {
         return this.replace(true);
       }
-      instance = await updateAiSearchInstance(api, this.output.id, payload);
+      instance = await updateAiSearchInstance(
+        api,
+        namespace,
+        this.output.id,
+        payload,
+      );
     } else {
-      try {
-        instance = await createAiSearchInstance(api, payload);
-      } catch (error) {
-        const isAlreadyExistsError =
-          error instanceof CloudflareApiError &&
-          error.status === 400 &&
-          (error.errorData as CloudflareApiErrorPayload[]).some(
-            (error) => error.code === 7022,
+      // Pre-flight adopt: if `adopt: true` and an instance already exists,
+      // adopt it directly via GET→PUT. This avoids racing on 400/7022 error
+      // codes and the fragile `errorData as CloudflareApiErrorPayload[]` cast.
+      if (adopt) {
+        const existing = await getAiSearchInstance(api, namespace, name).catch(
+          (e: unknown) => {
+            if (e instanceof CloudflareApiError && e.status === 404) {
+              return undefined;
+            }
+            throw e;
+          },
+        );
+        if (existing) {
+          instance = await updateAiSearchInstance(
+            api,
+            namespace,
+            existing.id,
+            payload,
           );
-        if (isAlreadyExistsError && adopt) {
-          instance = await getAiSearchInstance(api, name);
-          instance = await updateAiSearchInstance(api, instance.id, payload);
         } else {
+          instance = await createAiSearchInstance(api, namespace, payload);
+        }
+      } else {
+        try {
+          instance = await createAiSearchInstance(api, namespace, payload);
+        } catch (error) {
+          // Wrap "already exists" errors with a clearer message pointing at
+          // the adoption path (AGENTS.md convention).
+          const errorData = Array.isArray(
+            (error as CloudflareApiError | undefined)?.errorData,
+          )
+            ? ((error as CloudflareApiError)
+                .errorData as CloudflareApiErrorPayload[])
+            : [];
+          const isAlreadyExistsError =
+            error instanceof CloudflareApiError &&
+            error.status === 400 &&
+            errorData.some((e) => e.code === 7022);
+          if (isAlreadyExistsError) {
+            throw new Error(
+              `AI Search instance "${name}" already exists in namespace "${namespace}". Use \`adopt: true\` to adopt it.`,
+              { cause: error },
+            );
+          }
           throw error;
         }
       }
-      if (props.indexOnCreate !== false) {
-        await runAiSearchJob(api, instance.id, (message) =>
+      if (props.indexOnCreate !== false && source) {
+        await runAiSearchJob(api, namespace, instance.id, (message) =>
           logger.task(id, {
             prefix: "index",
             prefixColor: "gray",
@@ -461,14 +679,32 @@ export const AiSearch = Resource(
             message,
           }),
         );
+      } else if (props.indexOnCreate === true && !source) {
+        logger.warn(
+          `AI Search "${id}": \`indexOnCreate: true\` has no effect because no \`source\` was provided.`,
+        );
       }
     }
     return {
       ...snakeToCamelObjectDeep(instance),
       name: instance.id,
+      // The API response may include a `namespace` field; explicitly use the
+      // resolved local value to ensure the output always matches the prop
+      // (and defaults to "default" when unspecified).
+      namespace,
     };
   },
 );
+
+/**
+ * Resolve a namespace prop to a string name.
+ */
+function resolveNamespace(ns: string | AiSearchNamespace | undefined): string {
+  if (!ns) return "default";
+  if (typeof ns === "string") return ns;
+  if (isAiSearchNamespace(ns)) return ns.namespace;
+  return "default";
+}
 
 /**
  * Validate that a domain string is a valid domain format (not a URL).
@@ -576,8 +812,8 @@ export declare namespace AiSearch {
 
   interface ApiPayload {
     id: string;
-    source: string;
-    type: "r2" | "web-crawler";
+    source?: string;
+    type?: "r2" | "web-crawler";
     ai_gateway_id?: string;
     ai_search_model?: Model;
     cache?: boolean;
@@ -599,6 +835,8 @@ export declare namespace AiSearch {
     }>;
     embedding_model?: EmbeddingModel;
     hybrid_search_enabled?: boolean;
+    index_method?: { vector?: boolean; keyword?: boolean };
+    fusion_method?: "max" | "rrf";
     max_num_results?: number;
     metadata?: {
       created_from_aisearch_wizard?: boolean;
@@ -670,9 +908,10 @@ export declare namespace AiSearch {
     created_at: string;
     internal_id: string;
     modified_at: string;
-    source: string;
-    type: "r2" | "web-crawler";
+    source?: string;
+    type?: "r2" | "web-crawler";
     vectorize_name: string;
+    namespace?: string;
     ai_gateway_id?: string;
     ai_search_model?: Model;
     cache?: boolean; // default: true
@@ -693,6 +932,8 @@ export declare namespace AiSearch {
     enable?: boolean;
     engine_version?: number; // default: 1
     hybrid_search_enabled?: boolean;
+    index_method?: { vector?: boolean; keyword?: boolean };
+    fusion_method?: "max" | "rrf";
     last_activity?: string;
     max_num_results?: number; // maximum: 50, minimum: 1, default: 10
     metadata?: {
@@ -782,54 +1023,71 @@ export declare namespace AiSearch {
   }
 }
 
+// ─── Namespace-scoped API Helper Functions ───────────────────────────────────
+
+/**
+ * Base path for namespace-scoped instance operations
+ */
+function aiSearchInstanceBasePath(
+  api: CloudflareApi,
+  namespace: string,
+): string {
+  return `/accounts/${api.accountId}/ai-search/namespaces/${namespace}/instances`;
+}
+
 export async function listAiSearchInstances(
   api: CloudflareApi,
+  namespace = "default",
 ): Promise<AiSearch.ApiResponse[]> {
   return await extractCloudflareResult<AiSearch.ApiResponse[]>(
     "list AI Search instances",
-    api.get(`/accounts/${api.accountId}/ai-search/instances`),
+    api.get(aiSearchInstanceBasePath(api, namespace)),
   );
 }
 
 export async function createAiSearchInstance(
   api: CloudflareApi,
+  namespace: string,
   payload: AiSearch.ApiPayload,
 ): Promise<AiSearch.ApiResponse> {
   return await extractCloudflareResult<AiSearch.ApiResponse>(
     `create AI Search instance "${payload.id}"`,
-    api.post(`/accounts/${api.accountId}/ai-search/instances`, payload),
+    api.post(aiSearchInstanceBasePath(api, namespace), payload),
   );
 }
 
 export async function getAiSearchInstance(
   api: CloudflareApi,
+  namespace: string,
   id: string,
 ): Promise<AiSearch.ApiResponse> {
   return await extractCloudflareResult<AiSearch.ApiResponse>(
     `get AI Search instance "${id}"`,
-    api.get(`/accounts/${api.accountId}/ai-search/instances/${id}`),
+    api.get(`${aiSearchInstanceBasePath(api, namespace)}/${id}`),
   );
 }
 
 export async function updateAiSearchInstance(
   api: CloudflareApi,
+  namespace: string,
   id: string,
   payload: AiSearch.ApiPayload,
 ): Promise<AiSearch.ApiResponse> {
   return await extractCloudflareResult<AiSearch.ApiResponse>(
     `update AI Search instance "${id}"`,
-    api.put(`/accounts/${api.accountId}/ai-search/instances/${id}`, payload),
+    api.put(`${aiSearchInstanceBasePath(api, namespace)}/${id}`, payload),
   );
 }
 
 export async function deleteAiSearchInstance(
   api: CloudflareApi,
+  namespace: string,
   id: string,
 ): Promise<void> {
   try {
     await extractCloudflareResult(
       `delete AI Search instance "${id}"`,
-      api.delete(`/accounts/${api.accountId}/ai-search/instances/${id}`),
+      api.delete(`${aiSearchInstanceBasePath(api, namespace)}/${id}`),
     );
   } catch (error) {
     if (error instanceof CloudflareApiError && error.status === 404) {
@@ -837,7 +1095,26 @@ export async function deleteAiSearchInstance(
     }
     throw error;
   }
+
+  // Cloudflare's DELETE returns 204 before the instance fully disappears
+  // from the backing services. A subsequent GET can return the stale row
+  // for a bounded window — same-colo is invalidated immediately via the
+  // edge cache, cross-colo is bounded by a 60s KV TTL.
+  //
+  // Actively wait here so the destroy phase presents a strongly-
+  // consistent "instance is gone" guarantee to its callers (child token
+  // delete, user-facing teardown assertions, dependent resources).
+  await poll({
+    description: `wait for AI Search instance "${id}" deletion to propagate`,
+    fn: () => api.get(`${aiSearchInstanceBasePath(api, namespace)}/${id}`),
+    predicate: (res) => res.status === 404,
+    initialDelay: 500,
+    maxDelay: 5000,
+    timeout: 90_000,
+  });
 }
+
+// ─── Job API Helper Functions ────────────────────────────────────────────────
 
 interface AiSearchJobApiResponse {
   id: string;
@@ -850,24 +1127,24 @@ interface AiSearchJobApiResponse {
 
 export async function listAiSearchJobs(
   api: CloudflareApi,
+  namespace: string,
   aiSearchId: string,
 ): Promise<AiSearchJobApiResponse[]> {
   return await extractCloudflareResult<AiSearchJobApiResponse[]>(
     `list AI Search jobs for instance "${aiSearchId}"`,
-    api.get(
-      `/accounts/${api.accountId}/ai-search/instances/${aiSearchId}/jobs`,
-    ),
+    api.get(`${aiSearchInstanceBasePath(api, namespace)}/${aiSearchId}/jobs`),
   );
 }
 
 export async function createAiSearchJob(
   api: CloudflareApi,
+  namespace: string,
   aiSearchId: string,
 ): Promise<AiSearchJobApiResponse> {
   return await extractCloudflareResult<AiSearchJobApiResponse>(
     `create AI Search job for instance "${aiSearchId}"`,
     api.post(
-      `/accounts/${api.accountId}/ai-search/instances/${aiSearchId}/jobs`,
+      `${aiSearchInstanceBasePath(api, namespace)}/${aiSearchId}/jobs`,
       {},
     ),
   );
@@ -875,13 +1152,14 @@ export async function createAiSearchJob(
 
 export async function getAiSearchJob(
   api: CloudflareApi,
+  namespace: string,
   aiSearchId: string,
   jobId: string,
 ): Promise<AiSearchJobApiResponse> {
   return await extractCloudflareResult<AiSearchJobApiResponse>(
     `get AI Search job "${jobId}" for instance "${aiSearchId}"`,
     api.get(
-      `/accounts/${api.accountId}/ai-search/instances/${aiSearchId}/jobs/${jobId}`,
+      `${aiSearchInstanceBasePath(api, namespace)}/${aiSearchId}/jobs/${jobId}`,
     ),
   );
 }
@@ -895,6 +1173,7 @@ interface AiSearchJobLogItem {
 
 export async function listAiSearchJobLogs(
   api: CloudflareApi,
+  namespace: string,
   aiSearchId: string,
   jobId: string,
 ): Promise<AiSearchJobLogItem[]> {
@@ -902,7 +1181,7 @@ export async function listAiSearchJobLogs(
     return await extractCloudflareResult<AiSearchJobLogItem[]>(
       `list AI Search job logs for job "${jobId}" for instance "${aiSearchId}"`,
       api.get(
-        `/accounts/${api.accountId}/ai-search/instances/${aiSearchId}/jobs/${jobId}/logs?per_page=500`,
+        `${aiSearchInstanceBasePath(api, namespace)}/${aiSearchId}/jobs/${jobId}/logs?per_page=500`,
       ),
     );
   } catch (error) {
@@ -917,16 +1196,17 @@ export async function listAiSearchJobLogs(
 
 export async function runAiSearchJob(
   api: CloudflareApi,
+  namespace: string,
   aiSearchId: string,
   log: (message: string) => void,
 ): Promise<void> {
   log("Preparing to index...");
-  const job = await createAiSearchJob(api, aiSearchId);
+  const job = await createAiSearchJob(api, namespace, aiSearchId);
   let lastLogId = 0;
   let done = false;
   const resultPromise = poll({
     description: `run AI Search job "${job.id}" for instance "${aiSearchId}"`,
-    fn: () => getAiSearchJob(api, aiSearchId, job.id),
+    fn: () => getAiSearchJob(api, namespace, aiSearchId, job.id),
     predicate: (result) => result.ended_at !== null,
   });
   pollLogs();
@@ -936,7 +1216,7 @@ export async function runAiSearchJob(
   log(`Sync completed: ${result.end_reason}`);
 
   async function pollLogs() {
-    const logs = await listAiSearchJobLogs(api, aiSearchId, job.id);
+    const logs = await listAiSearchJobLogs(api, namespace, aiSearchId, job.id);
     for (let i = logs.length - 1; i >= 0; i--) {
       const item = logs[i];
       if (item.id > lastLogId) {

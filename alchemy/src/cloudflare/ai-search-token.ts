@@ -291,22 +291,56 @@ export async function listAiSearchTokens(
 }
 
 /**
- * Delete an AI Search token
+ * Delete an AI Search token.
+ *
+ * Retries briefly on `7076 token_in_use_by_instances` to cover residual
+ * cross-colo lag (CF's server retries the guard internally once after
+ * 500ms; the spurious-409 window is typically sub-second). We layer two
+ * client-side retries with 1s + 2s delays on top.
+ *
+ * A persistent 409 after the short retry window means the token is
+ * genuinely still referenced by another AI Search instance. We throw an
+ * actionable error rather than silently leaking the token — shared tokens
+ * should be modeled explicitly via an `AiSearchToken` resource.
  */
 export async function deleteAiSearchToken(
   api: CloudflareApi,
   tokenId: string,
 ): Promise<void> {
-  try {
-    await extractCloudflareResult(
-      `delete AI Search token "${tokenId}"`,
-      api.delete(`/accounts/${api.accountId}/ai-search/tokens/${tokenId}`),
-    );
-  } catch (error) {
-    if (error instanceof CloudflareApiError && error.status === 404) {
+  const retryDelaysMs = [1000, 2000]; // 2 retries, ~3s total
+  for (let attempt = 0; attempt <= retryDelaysMs.length; attempt++) {
+    try {
+      await extractCloudflareResult(
+        `delete AI Search token "${tokenId}"`,
+        api.delete(`/accounts/${api.accountId}/ai-search/tokens/${tokenId}`),
+      );
       return;
+    } catch (error) {
+      if (error instanceof CloudflareApiError && error.status === 404) {
+        return;
+      }
+      const isTokenInUse =
+        error instanceof CloudflareApiError &&
+        error.status === 409 &&
+        Array.isArray(error.errorData) &&
+        error.errorData.some((e: { code?: number }) => e?.code === 7076);
+      if (isTokenInUse && attempt < retryDelaysMs.length) {
+        await new Promise((resolve) =>
+          setTimeout(resolve, retryDelaysMs[attempt]),
+        );
+        continue;
+      }
+      if (isTokenInUse) {
+        throw new Error(
+          `AI Search token "${tokenId}" is still referenced by another instance. ` +
+            "If the token is intentionally shared across instances, manage it " +
+            "explicitly via an `AiSearchToken` resource with `delete: false`, " +
+            "or delete all referencing instances before deleting the token.",
+          { cause: error },
+        );
+      }
+      throw error;
     }
-    throw error;
   }
 }
 

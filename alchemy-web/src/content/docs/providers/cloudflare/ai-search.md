@@ -3,7 +3,21 @@ title: AiSearch
 description: Learn how to create and configure Cloudflare AI Search instances for RAG-powered semantic search using Alchemy.
 ---
 
-The AiSearch resource lets you create and manage [Cloudflare AI Search](https://developers.cloudflare.com/ai-search/) instances (formerly AutoRAG). AI Search automatically indexes your data from R2 buckets or web crawlers, creates vector embeddings, and provides natural language search with AI-generated responses.
+The AiSearch resource lets you create and manage [Cloudflare AI Search](https://developers.cloudflare.com/ai-search/) instances (formerly AutoRAG). AI Search automatically indexes your data from R2 buckets, web crawlers, or manual file uploads, creates vector embeddings, and provides natural language search with AI-generated responses.
+
+:::note[Requirements]
+- `@cloudflare/workers-types` ≥ `4.20260417.1`
+- Single-instance `ai_search` bindings only work for instances in the `default` namespace. For non-default namespaces, bind the enclosing [AiSearchNamespace](/providers/cloudflare/ai-search-namespace) and use `env.BINDING.get(name)`.
+:::
+
+## Query shapes
+
+The search / chatCompletions APIs accept two equivalent request shapes:
+
+- **`query: string`** — a simple text query, ideal for one-off lookups.
+- **`messages: Array<{role, content}>`** — a chat-style conversation array, ideal for RAG and multi-turn context.
+
+You can pass either `query` OR `messages`, not both. The examples in this page mix both styles.
 
 ## Minimal Example
 
@@ -19,9 +33,89 @@ const search = await AiSearch("docs-search", {
 });
 ```
 
-## Using AI Search from a Worker
+## Built-in Storage (No Source)
 
-AI Search instances are accessed through the `AI` binding using `env.AI.autorag(name)`. Pass `search.id` as a binding so your worker knows the actual instance name (which may be auto-generated based on your app and stage):
+Create an AI Search instance with built-in storage for manual file uploads via the binding. No source or token is needed:
+
+```ts
+import { AiSearch } from "alchemy/cloudflare";
+
+const search = await AiSearch("docs-search", {
+  name: "my-knowledge-base",
+});
+```
+
+Items can be uploaded through the AI Search binding at runtime. The `upload()` method accepts a `ReadableStream`, `Blob`, or `string` for content:
+
+```ts
+// In your Worker (where DOCS is bound to the AiSearch instance)
+// Upload a markdown document as a string
+await env.DOCS.items.upload("faq.md", "# FAQ\n\nQ: ...");
+
+// Upload a Blob (e.g. from a fetch response or form data)
+const file = (await request.formData()).get("file") as File;
+await env.DOCS.items.upload(file.name, file);
+```
+
+## Using AI Search Bindings (Recommended)
+
+AI Search instances can be bound directly to Workers as `ai_search` bindings, providing first-class access to search, chat, items, and jobs APIs:
+
+```ts
+import { Worker, AiSearch } from "alchemy/cloudflare";
+
+const search = await AiSearch("docs-search", {
+  name: "my-docs",
+});
+
+await Worker("api", {
+  entrypoint: "./src/worker.ts",
+  bindings: {
+    DOCS: search, // Direct AI Search binding
+  },
+});
+```
+
+```ts
+// src/worker.ts
+export default {
+  async fetch(request, env) {
+    // Simple lookup: pass `query`. For multi-turn / chat-style context,
+    // pass `messages: [{ role, content }, …]` instead (see Query shapes above).
+    const results = await env.DOCS.search({
+      query: "How does caching work?",
+    });
+    return Response.json(results);
+  },
+};
+```
+
+:::tip[Namespace Binding]
+For dynamic multi-instance access (per-tenant SaaS, multi-language content, AI agents), use the [AiSearchNamespace](/providers/cloudflare/ai-search-namespace) binding instead. See the [AiSearchNamespace docs](/providers/cloudflare/ai-search-namespace) for details.
+:::
+
+## Namespaces
+
+AI Search instances belong to namespaces. By default, instances are created in the `"default"` namespace. Use the `namespace` prop to place instances in a specific namespace:
+
+```ts
+import { AiSearch, AiSearchNamespace } from "alchemy/cloudflare";
+
+const ns = await AiSearchNamespace("production", {
+  name: "production",
+});
+
+const search = await AiSearch("docs-search", {
+  source: bucket,
+  namespace: ns, // or namespace: "production"
+});
+```
+
+See [AiSearchNamespace](/providers/cloudflare/ai-search-namespace) for managing namespaces.
+
+## Using AI Search via the AI Binding (Legacy)
+
+AI Search instances can also be accessed through the `AI` binding using `env.AI.autorag(name)`. This is scoped to the default namespace only:
 
 ```ts
 import { Worker, Ai, AiSearch, R2Bucket } from "alchemy/cloudflare";
@@ -65,9 +159,9 @@ export default {
 If you don't provide an explicit `name`, Alchemy generates one using `${app}-${stage}-${id}` (e.g., `myapp-dev-docs-search`). Always use `search.id` as a binding for portability across environments, or pass an explicit `name` if you need a predictable value.
 :::
 
-## RAG Response Generation
+## RAG Response Generation (legacy `AI` binding)
 
-Use `aiSearch()` to get AI-generated responses along with source documents:
+Use the legacy `AI` binding's `autorag(id).aiSearch()` to get AI-generated responses along with source documents. For the modern `ai_search` / `ai_search_namespaces` bindings, use `search()` / `chatCompletions()` on the binding directly instead (see [the docs](https://developers.cloudflare.com/ai-search/api/search/workers-binding/)).
 
 ```ts
 // src/worker.ts
@@ -236,7 +330,9 @@ const search = await AiSearch("cached-search", {
 
 ## Service Token
 
-AI Search requires a service token with specific permissions to access resources in your account. Alchemy handles this automatically:
+Service tokens are **only required for R2 bucket sources**. Web crawler and built-in storage instances do not need tokens.
+
+When using an R2 source, Alchemy handles token management automatically:
 
 1. **If tokens already exist**: Alchemy detects existing AI Search service tokens in your account and lets AI Search auto-select one. No new token is created.
 
@@ -278,9 +374,12 @@ See [AiSearchToken](/providers/cloudflare/ai-search-token) for more details.
 | Property | Type | Default | Description |
 |----------|------|---------|-------------|
 | `name` | `string` | auto-generated | Instance name (1-32 characters) |
-| `source` | `R2Bucket \| AiSearchR2Source \| AiSearchWebCrawlerSource` | required | Data source (bucket or config) |
+| `source` | `R2Bucket \| AiSearchR2Source \| AiSearchWebCrawlerSource` | — | Data source. Omit for built-in storage (upload-only). |
+| `namespace` | `string \| AiSearchNamespace` | `"default"` | Namespace the instance belongs to |
 | `aiSearchModel` | `string` | `@cf/meta/llama-3.3-70b-instruct-fp8-fast` | Text generation model |
 | `embeddingModel` | `string` | `@cf/baai/bge-m3` | Embedding model |
+| `indexMethod` | `{ vector?: boolean; keyword?: boolean }` | vector-only | Controls which storage backends are used. Set both to `true` for hybrid search. |
+| `fusionMethod` | `"max" \| "rrf"` | `"rrf"` | Fusion method for combining vector and keyword results |
 | `chunk` | `boolean` | `true` | Enable document chunking |
 | `chunkSize` | `number` | `256` | Chunk size (minimum 64) |
 | `chunkOverlap` | `number` | `10` | Overlap between chunks (0-30) |
@@ -293,7 +392,40 @@ See [AiSearchToken](/providers/cloudflare/ai-search-token) for more details.
 | `cache` | `boolean` | `false` | Enable similarity caching |
 | `cacheThreshold` | `"super_strict_match" \| "close_enough" \| "flexible_friend" \| "anything_goes"` | `"close_enough"` | Cache similarity threshold |
 | `metadata` | `Record<string, unknown>` | — | Custom metadata |
-| `indexOnCreate` | `boolean` | `true` | Index source documents when the instance is created |
-| `token` | `AiSearchToken` | auto-created | Service token (or use `tokenId` with an existing token UUID) |
+| `indexOnCreate` | `boolean` | `true` | Index source documents on creation (only when source is provided) |
+| `token` | `AiSearchToken` | auto-created for R2 | Service token (only needed for R2 sources) |
 | `delete` | `boolean` | `true` | Delete instance on removal |
 | `adopt` | `boolean` | `false` | Adopt existing instance |
+
+## Output Properties
+
+| Property | Type | Description |
+|----------|------|-------------|
+| `id` | `string` | Instance name on Cloudflare (equal to `name`) |
+| `name` | `string` | Instance name (what `ai_search` bindings emit as `instance_name`) |
+| `namespace` | `string` | Namespace the instance lives in (defaults to `"default"`) |
+| `createdAt` | `string` | Creation timestamp (ISO 8601) |
+| `modifiedAt` | `string` | Last-modified timestamp |
+| `internalId` | `string` | Cloudflare-internal identifier for the instance |
+| `vectorizeName` | `string` | Underlying Vectorize index name (legacy instances only) |
+| `tokenId` | `string \| undefined` | Service-token id (only present for R2-backed instances) |
+| `source` | `string \| undefined` | Resolved data source (bucket name for R2, domain for web-crawler, `undefined` for sourceless) |
+| `type` | `"r2" \| "web-crawler" \| undefined` | Source type, or `undefined` for sourceless (built-in storage) instances |
+
+## Type Guard
+
+To narrow an unknown binding or resource to an `AiSearch`, use `isAiSearch`:
+
+```ts
+import { isAiSearch } from "alchemy/cloudflare";
+
+if (isAiSearch(binding)) {
+  // binding is narrowed to AiSearch
+  console.log(binding.name, binding.namespace);
+}
+```
+
+## See also
+
+- [Cloudflare AI Search — Workers binding reference](https://developers.cloudflare.com/ai-search/api/search/workers-binding/)
+- [Cloudflare AI Search — Overview](https://developers.cloudflare.com/ai-search/)

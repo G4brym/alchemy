@@ -5,6 +5,8 @@
  */
 import type { Secret } from "../secret.ts";
 import type { Ai } from "./ai.ts";
+import type { AiSearchNamespace } from "./ai-search-namespace.ts";
+import type { AiSearch } from "./ai-search.ts";
 import type { AnalyticsEngineDataset } from "./analytics-engine.ts";
 import type { Assets } from "./assets.ts";
 import type { Bound } from "./bound.ts";
@@ -49,6 +51,8 @@ export declare namespace Bindings {
  */
 export type Binding =
   | Ai
+  | AiSearch
+  | AiSearchNamespace
   | Assets
   | Container
   | CloudflareSecret
@@ -120,6 +124,8 @@ export function Json<const T>(value: T): Json<T> {
  */
 export type WorkerBindingSpec =
   | WorkerBindingAI
+  | WorkerBindingAiSearch
+  | WorkerBindingAiSearchNamespace
   | WorkerBindingAnalyticsEngine
   | WorkerBindingAssets
   | WorkerBindingBrowserRendering
@@ -159,6 +165,33 @@ export interface WorkerBindingAI {
   name: string;
   /** Type identifier for AI binding */
   type: "ai";
+}
+
+/**
+ * AI Search single instance binding type.
+ * Binds directly to one specific AI Search instance (always scoped to default namespace).
+ */
+export interface WorkerBindingAiSearch {
+  /** The name of the binding */
+  name: string;
+  /** Type identifier for AI Search single instance binding */
+  type: "ai_search";
+  /** The AI Search instance name */
+  instance_name: string;
+}
+
+/**
+ * AI Search namespace binding type.
+ * Scoped to a user-defined namespace of AI Search instances.
+ * Grants full access (CRUD + search + chat) to all instances within the namespace.
+ */
+export interface WorkerBindingAiSearchNamespace {
+  /** The name of the binding */
+  name: string;
+  /** Type identifier for AI Search namespace binding */
+  type: "ai_search_namespace";
+  /** The namespace name */
+  namespace: string;
 }
 
 /**
