@@ -40,8 +40,6 @@ type RemoteBinding =
       {
         type:
           | "ai"
-          | "ai_search"
-          | "ai_search_namespace"
           | "browser"
           | "dispatch_namespace"
           | "mtls_certificate"
@@ -57,7 +55,13 @@ type RemoteBinding =
   | Extract<
       WorkerBindingSpec,
       { type: "send_email" | "service" | "vpc_service" }
-    >;
+    >
+  // AI Search bindings reject the `raw` flag at the Cloudflare API
+  // validation layer (10333). Wrangler's upload form deliberately omits
+  // `raw` for these two binding types in
+  // packages/wrangler/src/deployment-bundle/create-worker-upload-form.ts,
+  // so we mirror that here for the remote-binding-proxy upload.
+  | Extract<WorkerBindingSpec, { type: "ai_search" | "ai_search_namespace" }>;
 
 type BaseWorkerOptions = {
   [K in keyof miniflare.WorkerOptions]: K extends
@@ -96,24 +100,30 @@ export const buildWorkerOptions = async (
     }
     if (isAiSearch(binding)) {
       // AI Search instance bindings are not supported natively by Miniflare;
-      // proxy them to the deployed instance (same mechanism used by `ai`,
-      // `vectorize`, etc.). Instance bindings are always scoped to the
-      // default namespace on the CF side, so the namespace need not be
-      // surfaced in the remote-proxy metadata.
+      // proxy them to the deployed instance via the `remote-binding-proxy`
+      // worker (same mechanism used by `ai`, `vectorize`, etc.). Instance
+      // bindings are always scoped to the default namespace on the CF side,
+      // so the namespace need not be surfaced in the remote-proxy metadata.
+      //
+      // Note: unlike `ai`/`browser`/`vectorize`, AI Search bindings must NOT
+      // carry `raw: true` — CF's API rejects that field on `ai_search` and
+      // `ai_search_namespace` bindings (error 10333). This mirrors wrangler's
+      // create-worker-upload-form.ts which also omits `raw` for these two
+      // binding types.
       remoteBindings.push({
         type: "ai_search",
         name: key,
         instance_name: binding.name,
-        raw: true,
       });
       continue;
     }
     if (isAiSearchNamespace(binding)) {
+      // See comment above on `ai_search`: `raw: true` is rejected by CF for
+      // this binding type, so we push without it.
       remoteBindings.push({
         type: "ai_search_namespace",
         name: key,
         namespace: binding.namespace,
-        raw: true,
       });
       continue;
     }

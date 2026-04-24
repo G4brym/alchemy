@@ -39,7 +39,12 @@ export async function createRemoteProxyWorker(input: {
   bindings: WorkerBindingSpec[];
 }): Promise<RemoteBindingProxy> {
   const script = await getInternalWorkerBundle("remote-binding-proxy");
-  const [token, { host, accessToken }] = await Promise.all([
+  // We must create the preview token BEFORE probing for Cloudflare Access:
+  // a preview worker URL only returns the Access 302 when the request carries
+  // the preview token (otherwise CF responds with 404 regardless of Access
+  // configuration). Probing without the token would incorrectly report
+  // "no Access" for accounts that do gate workers.dev behind Access.
+  const [token, subdomain] = await Promise.all([
     createWorkersPreviewToken(input.api, {
       name: input.name,
       metadata: {
@@ -54,14 +59,10 @@ export async function createRemoteProxyWorker(input: {
         minimal_mode: true,
       },
     }),
-    getAccountSubdomain(input.api).then(async (subdomain) => {
-      const host = `${input.name}.${subdomain}.workers.dev`;
-      return {
-        host,
-        accessToken: await getAccessToken(host),
-      };
-    }),
+    getAccountSubdomain(input.api),
   ]);
+  const host = `${input.name}.${subdomain}.workers.dev`;
+  const accessToken = await getAccessToken(host, token);
 
   const baseHeaders: Record<string, string> = {
     "cf-workers-preview-token": token,
@@ -158,7 +159,13 @@ async function createWorkersPreviewToken(
 
 async function prewarm(url: string, previewToken: string) {
   try {
-    const accessToken = await getAccessToken(new URL(url).hostname);
+    // Pass the preview token to the Access probe — prewarm targets a preview
+    // worker URL, which only surfaces an Access 302 when the request carries
+    // the preview token.
+    const accessToken = await getAccessToken(
+      new URL(url).hostname,
+      previewToken,
+    );
     await fetch(url, {
       method: "POST",
       headers: {
@@ -197,42 +204,59 @@ async function createWorkersPreviewSession(api: CloudflareApi) {
 /**
  * If the given domain uses Cloudflare Access, fetches the access token for the domain.
  * Otherwise, returns undefined.
+ *
+ * For workers.dev preview URLs, pass the `cf-workers-preview-token` alongside
+ * the HEAD probe: the preview worker only surfaces its Access 302 when the
+ * request carries the preview token (a bare HEAD returns 404 regardless of
+ * Access configuration).
+ *
  * @see https://github.com/cloudflare/workers-sdk/blob/a5eb5134f73d3983655d325a4de71c6370c57faa/packages/wrangler/src/user/access.ts#L10
  */
-const getAccessToken = memoize(async (hostname: string) => {
-  if (!(await domainUsesAccess(hostname))) {
-    return undefined;
-  }
-  const result = await Scope.current
-    .exec(`access-${hostname}`, `cloudflared access login ${hostname}`)
-    .catch(() => {
-      throw new Error(
-        [
-          `The \`cloudflared\` CLI is not installed, but is required to access the domain "${hostname}".`,
-          `Please install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation and run \`cloudflare access login ${hostname}\`.`,
-        ].join("\n"),
-      );
-    });
-  const matches = result.stdout.match(/fetched your token:\n\n(.*)/m);
-  if (matches?.[1]) {
-    return matches[1];
-  }
-  const error = new Error(
-    `Failed to get access token for domain "${hostname}".`,
-  );
-  Object.assign(error, result);
-  throw error;
-});
+const getAccessToken = memoize(
+  async (hostname: string, previewToken?: string) => {
+    if (!(await domainUsesAccess(hostname, previewToken))) {
+      return undefined;
+    }
+    const result = await Scope.current
+      .exec(`access-${hostname}`, `cloudflared access login ${hostname}`)
+      .catch(() => {
+        throw new Error(
+          [
+            `The \`cloudflared\` CLI is not installed, but is required to access the domain "${hostname}".`,
+            `Please install it from https://developers.cloudflare.com/cloudflare-one/connections/connect-apps/install-and-setup/installation and run \`cloudflare access login ${hostname}\`.`,
+          ].join("\n"),
+        );
+      });
+    const matches = result.stdout.match(/fetched your token:\n\n(.*)/m);
+    if (matches?.[1]) {
+      return matches[1];
+    }
+    const error = new Error(
+      `Failed to get access token for domain "${hostname}".`,
+    );
+    Object.assign(error, result);
+    throw error;
+  },
+  (hostname) => hostname,
+);
 
 /**
  * Returns true if the domain uses Cloudflare Access.
+ *
+ * @param hostname  the workers.dev preview host
+ * @param previewToken  optional preview token; required when probing a
+ *   preview-worker URL because CF only serves the Access 302 to requests
+ *   that carry the token.
  */
-async function domainUsesAccess(hostname: string) {
+async function domainUsesAccess(hostname: string, previewToken?: string) {
   try {
     const response = await fetch(`https://${hostname}`, {
       method: "HEAD",
       redirect: "manual",
       signal: AbortSignal.timeout(1000),
+      headers: previewToken
+        ? { "cf-workers-preview-token": previewToken }
+        : undefined,
     });
     return !!(
       response.status === 302 &&

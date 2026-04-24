@@ -373,32 +373,13 @@ export const AiSearch = Resource(
     // Resolve namespace: AiSearchNamespace resource → string, default to "default"
     const namespace = resolveNamespace(props.namespace);
 
-    if (this.scope.local) {
-      // Local development mode — return a mock shape so `alchemy dev` does
-      // not hit the real Cloudflare API. Matches the AiSearchNamespace
-      // local-mode pattern and satisfies AGENTS.md requirements.
-      const name =
-        props.name ??
-        this.output?.name ??
-        this.scope.createPhysicalName(id, "-", 32);
-      const now = new Date().toISOString();
-      // `AiSearch` is `SnakeToCamel<ApiResponse>` intersected with extras —
-      // all non-required fields are optional, so we only populate what's
-      // needed. No `as unknown as` escape hatch required.
-      const mock: AiSearch = {
-        id: name,
-        name,
-        namespace,
-        accountId: "local",
-        accountTag: "local",
-        createdAt: now,
-        internalId: name,
-        modifiedAt: now,
-        vectorizeName: "",
-      };
-      return mock;
-    }
-
+    // NOTE: AI Search is an always-remote binding (no Miniflare-native
+    // implementation). `alchemy dev` wires the worker binding via
+    // `remote-binding-proxy`, which requires the instance to actually exist
+    // on Cloudflare at preview-token creation time — a locally mocked
+    // resource would cause the Worker deploy to fail with error 10360
+    // ("instance … not found"). Follow the same pattern as Vectorize and
+    // skip the `scope.local` mock branch entirely.
     const api = await createCloudflareApi(props);
 
     const validateBucketSource = async (

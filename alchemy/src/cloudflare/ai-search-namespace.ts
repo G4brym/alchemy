@@ -194,17 +194,13 @@ export const AiSearchNamespace = Resource(
       );
     }
 
-    if (this.scope.local) {
-      // Local development mode — return mock output
-      return {
-        type: "ai_search_namespace",
-        id: namespace,
-        namespace,
-        description: props.description ?? null,
-        createdAt: new Date().toISOString(),
-      };
-    }
-
+    // NOTE: AI Search is an always-remote binding (no Miniflare-native
+    // implementation). `alchemy dev` wires the worker binding via
+    // `remote-binding-proxy`, which requires the namespace to actually exist
+    // on Cloudflare at preview-token creation time — a locally mocked
+    // resource would cause the Worker deploy to fail with error 10359
+    // ("namespace … does not exist"). Follow the same pattern as Vectorize
+    // and skip the `scope.local` mock branch entirely.
     const api = await createCloudflareApi(props);
 
     if (this.phase === "delete") {
