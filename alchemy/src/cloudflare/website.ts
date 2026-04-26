@@ -10,6 +10,7 @@ import { Assets } from "./assets.ts";
 import type { Bindings } from "./bindings.ts";
 import { DEFAULT_COMPATIBILITY_DATE } from "./compatibility-date.ts";
 import { unionCompatibilityFlags } from "./compatibility-presets.ts";
+import { quickTunnel } from "./quick-tunnel.ts";
 import {
   extractStringAndSecretBindings,
   unencryptSecrets,
@@ -78,6 +79,10 @@ export interface WebsiteProps<
          * The local domain to use for the dev server
          */
         domain?: string;
+        /**
+         * Whether to use a Cloudflare Tunnel for the dev server
+         */
+        tunnel?: boolean;
         /**
          * Additional environment variables to set when running the dev command
          */
@@ -363,6 +368,10 @@ export async function Website<
         ALCHEMY_ROOT: Scope.current.rootDir,
       },
     });
+    if (url && ((typeof dev === "object" && dev.tunnel) || scope.tunnel)) {
+      const { tunnelUrl } = await quickTunnel(scope, url);
+      url = tunnelUrl;
+    }
   }
 
   return (await Worker(id, {
@@ -377,7 +386,16 @@ export async function Website<
           }
         : {}),
     },
-    dev: url ? { url } : undefined,
+    dev: worker.dev
+      ? {
+          url: url as never,
+          port: worker.dev.port,
+          remote: worker.dev.remote,
+          tunnel: worker.dev.tunnel,
+        }
+      : url
+        ? { url }
+        : undefined,
   })) as Website<B, RPC>;
 }
 
