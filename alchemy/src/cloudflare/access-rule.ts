@@ -1,3 +1,4 @@
+import { ResourceKind } from "../resource.ts";
 import type { AccessGroup } from "./access-group.ts";
 import type { AccessIdentityProvider } from "./access-identity-provider.ts";
 import type { AccessServiceToken } from "./access-service-token.ts";
@@ -284,10 +285,25 @@ export function serializeAccessRule(rule: AccessRule): Record<string, unknown> {
   for (const [field, fieldValue] of Object.entries(
     value as Record<string, unknown>,
   )) {
-    serialized[field] =
-      fieldValue && typeof fieldValue === "object" && !Array.isArray(fieldValue)
-        ? (fieldValue as { id: string }).id
-        : fieldValue;
+    serialized[field] = isResourceRef(fieldValue)
+      ? (fieldValue as { id: string }).id
+      : fieldValue;
   }
   return { [key]: serialized };
+}
+
+/**
+ * True for Alchemy Resource objects (carry the {@link ResourceKind} symbol),
+ * false for plain literal values — including future rule shapes that may nest
+ * literal config objects.
+ *
+ * @internal
+ */
+function isResourceRef(value: unknown): value is { id: string } {
+  return (
+    !!value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    (value as Record<symbol, unknown>)[ResourceKind] !== undefined
+  );
 }

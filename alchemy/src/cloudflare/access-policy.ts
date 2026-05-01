@@ -73,8 +73,8 @@ export interface AccessPolicyProps extends CloudflareApiOptions {
   decision: AccessPolicyDecision;
 
   /**
-   * Rules a request must match to be considered (OR logic). At least one
-   * rule is required.
+   * Rules a request must match to be considered (OR logic). Must be
+   * non-empty — Cloudflare rejects policies with no include rules.
    */
   include: AccessRule[];
 

@@ -206,12 +206,12 @@ interface CloudflareAccessIdentityProvider {
  * });
  *
  * @example
- * // Google OAuth.
+ * // Google OAuth. clientId is a public OAuth identifier (not a secret).
  * const google = await AccessIdentityProvider("google", {
  *   type: "google",
  *   name: "Google",
  *   config: {
- *     clientId: alchemy.secret.env.GOOGLE_CLIENT_ID.unencrypted,
+ *     clientId: process.env.GOOGLE_CLIENT_ID!,
  *     clientSecret: alchemy.secret.env.GOOGLE_CLIENT_SECRET,
  *   },
  * });
@@ -306,9 +306,20 @@ export const AccessIdentityProvider = Resource(
       }
     }
 
-    const { adopt: _adopt, delete: _delete, ...rest } = props;
-    void _adopt;
-    void _delete;
+    const rest: Record<string, unknown> = { ...props };
+    delete rest.adopt;
+    delete rest.delete;
+
+    // Output convention (CLAUDE.md): secrets are always wrapped. If the user
+    // passed a raw string for clientSecret, normalize it before returning.
+    const config = rest.config as Record<string, unknown> | undefined;
+    if (config && typeof config.clientSecret === "string") {
+      rest.config = {
+        ...config,
+        clientSecret: Secret.wrap(config.clientSecret),
+      };
+    }
+
     return {
       ...rest,
       id: result.id,
