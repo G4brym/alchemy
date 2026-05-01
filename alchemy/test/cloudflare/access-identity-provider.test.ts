@@ -3,6 +3,7 @@ import { alchemy } from "../../src/alchemy.ts";
 import { AccessIdentityProvider } from "../../src/cloudflare/access-identity-provider.ts";
 import { createCloudflareApi } from "../../src/cloudflare/api.ts";
 import { destroy } from "../../src/destroy.ts";
+import { Secret } from "../../src/secret.ts";
 import { BRANCH_PREFIX } from "../util.ts";
 
 import "../../src/test/vitest.ts";
@@ -16,27 +17,51 @@ const test = alchemy.test(import.meta, {
 describe.skipIf(!process.env.ALL_TESTS)(
   "AccessIdentityProvider Resource",
   () => {
-    const testId = `${BRANCH_PREFIX}-access-otp-idp`;
+    const testId = `${BRANCH_PREFIX}-access-oidc-idp`;
 
-    test("create, update, and delete OneTimePin identity provider", async (scope) => {
+    // Cloudflare allows only one OneTimePin IdP per account, which makes it a
+    // poor choice for an integration test on accounts that already have one.
+    // OIDC has no such constraint and accepts stub URLs at creation time, so
+    // it exercises the create/update/delete path plus secret normalisation
+    // (camelToSnakeWithSecrets + clientSecret -> Secret on output).
+    test("create, update, and delete OIDC identity provider", async (scope) => {
       let idp: AccessIdentityProvider | undefined;
       try {
-        // Create — OneTimePin requires no external config.
         idp = await AccessIdentityProvider(testId, {
-          type: "onetimepin",
-          name: `Test OTP ${testId}`,
+          type: "oidc",
+          name: `Test OIDC ${testId}`,
+          config: {
+            authUrl: "https://idp.example.com/oauth2/authorize",
+            tokenUrl: "https://idp.example.com/oauth2/token",
+            certsUrl: "https://idp.example.com/oauth2/certs",
+            clientId: "test-client-id",
+            clientSecret: "test-client-secret",
+          },
         });
         expect(idp.id).toBeTruthy();
-        expect(idp.type).toEqual("onetimepin");
+        expect(idp.type).toEqual("oidc");
+        // Output convention: secrets are always wrapped, even when the user
+        // passed a raw string in props.
+        const config = (idp as unknown as { config: { clientSecret: Secret } })
+          .config;
+        expect(config.clientSecret).toBeInstanceOf(Secret);
         const initialId = idp.id;
 
-        // Update name.
+        // Update name (and re-send the secret — Cloudflare requires it on PUT
+        // or it overwrites with empty).
         idp = await AccessIdentityProvider(testId, {
-          type: "onetimepin",
-          name: `Updated OTP ${testId}`,
+          type: "oidc",
+          name: `Updated OIDC ${testId}`,
+          config: {
+            authUrl: "https://idp.example.com/oauth2/authorize",
+            tokenUrl: "https://idp.example.com/oauth2/token",
+            certsUrl: "https://idp.example.com/oauth2/certs",
+            clientId: "test-client-id",
+            clientSecret: "test-client-secret",
+          },
         });
         expect(idp.id).toEqual(initialId);
-        expect(idp.name).toEqual(`Updated OTP ${testId}`);
+        expect(idp.name).toEqual(`Updated OIDC ${testId}`);
       } finally {
         await destroy(scope);
         if (idp?.id) {

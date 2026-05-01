@@ -259,15 +259,17 @@ export const AccessIdentityProvider = Resource(
       this.replace(true);
     }
 
+    // Cloudflare requires `config` to always be present, even for variants
+    // that don't take any (e.g. `onetimepin`). Omitting it returns
+    // [12130] "unexpected end of JSON input".
     const body: Record<string, unknown> = {
       name,
       type: props.type,
+      config:
+        "config" in props && props.config
+          ? camelToSnakeWithSecrets(props.config as Record<string, unknown>)
+          : {},
     };
-    if ("config" in props && props.config) {
-      body.config = camelToSnakeWithSecrets(
-        props.config as Record<string, unknown>,
-      );
-    }
 
     let result: CloudflareAccessIdentityProvider;
     if (this.phase === "update" && this.output?.id) {
