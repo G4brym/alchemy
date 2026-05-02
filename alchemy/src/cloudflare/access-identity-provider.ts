@@ -72,12 +72,29 @@ export interface OneTimePinIdentityProviderProps extends BaseAccessIdpProps {
  */
 export interface GoogleIdentityProviderProps extends BaseAccessIdpProps {
   type: "google";
-  config: {
-    clientId: string;
-    clientSecret: string | Secret;
-    claims?: string[];
-    emailClaimName?: string;
-  };
+
+  /**
+   * OAuth 2.0 client ID issued by Google for your application.
+   * This is a public identifier (not a secret).
+   */
+  clientId: string;
+
+  /**
+   * OAuth 2.0 client secret issued by Google. Use {@link alchemy.secret} so
+   * the value is encrypted at rest in the Alchemy state file.
+   */
+  clientSecret: string | Secret;
+
+  /**
+   * Custom claims to request from the IdP and forward into the Access JWT.
+   */
+  claims?: string[];
+
+  /**
+   * Override the OIDC claim Cloudflare reads as the user's email
+   * (defaults to `email`).
+   */
+  emailClaimName?: string;
 }
 
 /**
@@ -85,15 +102,39 @@ export interface GoogleIdentityProviderProps extends BaseAccessIdpProps {
  */
 export interface OktaIdentityProviderProps extends BaseAccessIdpProps {
   type: "okta";
-  config: {
-    /** Your Okta tenant subdomain, e.g. `acme` for `acme.okta.com`. */
-    oktaAccount: string;
-    authorizationServerId?: string;
-    clientId: string;
-    clientSecret: string | Secret;
-    claims?: string[];
-    emailClaimName?: string;
-  };
+
+  /**
+   * Your Okta tenant subdomain, e.g. `acme` for `acme.okta.com`.
+   */
+  oktaAccount: string;
+
+  /**
+   * Custom Okta authorization server ID. Omit to use Okta's default
+   * authorization server.
+   */
+  authorizationServerId?: string;
+
+  /**
+   * OAuth 2.0 client ID of the Okta app integration.
+   */
+  clientId: string;
+
+  /**
+   * OAuth 2.0 client secret of the Okta app integration. Use
+   * {@link alchemy.secret} for at-rest encryption.
+   */
+  clientSecret: string | Secret;
+
+  /**
+   * Custom claims to request from Okta and forward into the Access JWT.
+   */
+  claims?: string[];
+
+  /**
+   * Override the OIDC claim Cloudflare reads as the user's email
+   * (defaults to `email`).
+   */
+  emailClaimName?: string;
 }
 
 /**
@@ -101,17 +142,58 @@ export interface OktaIdentityProviderProps extends BaseAccessIdpProps {
  */
 export interface OidcIdentityProviderProps extends BaseAccessIdpProps {
   type: "oidc";
-  config: {
-    authUrl: string;
-    tokenUrl: string;
-    certsUrl: string;
-    clientId: string;
-    clientSecret: string | Secret;
-    scopes?: string[];
-    claims?: string[];
-    emailClaimName?: string;
-    pkceEnabled?: boolean;
-  };
+
+  /**
+   * IdP authorization endpoint URL (the page users are redirected to to
+   * sign in).
+   */
+  authUrl: string;
+
+  /**
+   * IdP token endpoint URL (used by Cloudflare to exchange the auth code
+   * for tokens).
+   */
+  tokenUrl: string;
+
+  /**
+   * JWKS endpoint URL — public keys Cloudflare uses to verify ID-token
+   * signatures.
+   */
+  certsUrl: string;
+
+  /**
+   * OAuth 2.0 client ID registered with the IdP.
+   */
+  clientId: string;
+
+  /**
+   * OAuth 2.0 client secret registered with the IdP. Use
+   * {@link alchemy.secret} for at-rest encryption.
+   */
+  clientSecret: string | Secret;
+
+  /**
+   * OIDC scopes to request. Defaults to `["openid", "email", "profile"]`
+   * server-side if omitted.
+   */
+  scopes?: string[];
+
+  /**
+   * Custom claims to request from the IdP and forward into the Access JWT.
+   */
+  claims?: string[];
+
+  /**
+   * Override the OIDC claim Cloudflare reads as the user's email
+   * (defaults to `email`).
+   */
+  emailClaimName?: string;
+
+  /**
+   * Enable PKCE on the authorization code flow. Recommended for public
+   * clients and required by some IdPs.
+   */
+  pkceEnabled?: boolean;
 }
 
 /**
@@ -119,16 +201,46 @@ export interface OidcIdentityProviderProps extends BaseAccessIdpProps {
  */
 export interface SamlIdentityProviderProps extends BaseAccessIdpProps {
   type: "saml";
-  config: {
-    issuerUrl: string;
-    ssoTargetUrl: string;
-    /** PEM-encoded x509 certificates the IdP will use to sign assertions. */
-    idpPublicCerts: string[];
-    attributes?: string[];
-    emailAttributeName?: string;
-    headerAttributes?: { headerName: string; attributeName: string }[];
-    signRequest?: boolean;
-  };
+
+  /**
+   * SAML issuer (entity ID) of the IdP, used to validate the `Issuer`
+   * element of incoming assertions.
+   */
+  issuerUrl: string;
+
+  /**
+   * IdP single sign-on URL — Cloudflare redirects users here to start
+   * the SAML flow.
+   */
+  ssoTargetUrl: string;
+
+  /**
+   * PEM-encoded x509 certificates the IdP will use to sign assertions.
+   * Multiple entries support certificate rotation.
+   */
+  idpPublicCerts: string[];
+
+  /**
+   * SAML attributes to forward from the assertion into the Access JWT.
+   */
+  attributes?: string[];
+
+  /**
+   * Override the SAML attribute Cloudflare reads as the user's email
+   * (defaults to `email`).
+   */
+  emailAttributeName?: string;
+
+  /**
+   * Map SAML attributes to HTTP headers Cloudflare will inject when
+   * forwarding requests to the origin.
+   */
+  headerAttributes?: { headerName: string; attributeName: string }[];
+
+  /**
+   * Sign outgoing AuthnRequests with Cloudflare's signing key.
+   */
+  signRequest?: boolean;
 }
 
 /**
@@ -137,13 +249,20 @@ export interface SamlIdentityProviderProps extends BaseAccessIdpProps {
  * `onelogin`, `pingone`, `yandex`, or future providers).
  *
  * Pass a free-form camelCase `config` object — keys are converted to
- * snake_case at the API boundary.
+ * snake_case at the API boundary. This nested escape hatch is an
+ * intentional exception to the flat-props convention used by the strict
+ * variants above.
  */
 export interface OtherIdentityProviderProps extends BaseAccessIdpProps {
   type: Exclude<
     AccessIdentityProviderType,
     "onetimepin" | "google" | "okta" | "oidc" | "saml"
   >;
+
+  /**
+   * Free-form provider configuration. Use {@link alchemy.secret} for any
+   * sensitive values; they are unwrapped before sending to Cloudflare.
+   */
   config: { clientId?: string; clientSecret?: string | Secret } & Record<
     string,
     unknown
@@ -183,10 +302,6 @@ export function isAccessIdentityProvider(
   return resource?.[ResourceKind] === "cloudflare::AccessIdentityProvider";
 }
 
-/**
- * Cloudflare wire shape.
- * @internal
- */
 interface CloudflareAccessIdentityProvider {
   id: string;
   name: string;
@@ -210,10 +325,8 @@ interface CloudflareAccessIdentityProvider {
  * const google = await AccessIdentityProvider("google", {
  *   type: "google",
  *   name: "Google",
- *   config: {
- *     clientId: process.env.GOOGLE_CLIENT_ID!,
- *     clientSecret: alchemy.secret.env.GOOGLE_CLIENT_SECRET,
- *   },
+ *   clientId: process.env.GOOGLE_CLIENT_ID!,
+ *   clientSecret: alchemy.secret.env.GOOGLE_CLIENT_SECRET,
  * });
  *
  * @example
@@ -221,15 +334,13 @@ interface CloudflareAccessIdentityProvider {
  * const oidc = await AccessIdentityProvider("idp", {
  *   type: "oidc",
  *   name: "Corporate IdP",
- *   config: {
- *     authUrl: "https://idp.example.com/oauth2/authorize",
- *     tokenUrl: "https://idp.example.com/oauth2/token",
- *     certsUrl: "https://idp.example.com/oauth2/certs",
- *     clientId: "my-app",
- *     clientSecret: alchemy.secret.env.IDP_CLIENT_SECRET,
- *     scopes: ["openid", "email", "profile"],
- *     pkceEnabled: true,
- *   },
+ *   authUrl: "https://idp.example.com/oauth2/authorize",
+ *   tokenUrl: "https://idp.example.com/oauth2/token",
+ *   certsUrl: "https://idp.example.com/oauth2/certs",
+ *   clientId: "my-app",
+ *   clientSecret: alchemy.secret.env.IDP_CLIENT_SECRET,
+ *   scopes: ["openid", "email", "profile"],
+ *   pkceEnabled: true,
  * });
  */
 export const AccessIdentityProvider = Resource(
@@ -265,10 +376,7 @@ export const AccessIdentityProvider = Resource(
     const body: Record<string, unknown> = {
       name,
       type: props.type,
-      config:
-        "config" in props && props.config
-          ? camelToSnakeWithSecrets(props.config as Record<string, unknown>)
-          : {},
+      config: extractIdpConfig(props),
     };
 
     let result: CloudflareAccessIdentityProvider;
@@ -312,8 +420,12 @@ export const AccessIdentityProvider = Resource(
     delete rest.adopt;
     delete rest.delete;
 
-    // Output convention (CLAUDE.md): secrets are always wrapped. If the user
-    // passed a raw string for clientSecret, normalize it before returning.
+    // Output convention (CLAUDE.md): secrets are always wrapped. Strict
+    // variants carry `clientSecret` at the top level; the `Other` variant
+    // tucks it inside `config`.
+    if (typeof rest.clientSecret === "string") {
+      rest.clientSecret = Secret.wrap(rest.clientSecret);
+    }
     const config = rest.config as Record<string, unknown> | undefined;
     if (config && typeof config.clientSecret === "string") {
       rest.config = {
@@ -331,11 +443,51 @@ export const AccessIdentityProvider = Resource(
 );
 
 /**
+ * Top-level prop keys that are *not* part of the IdP-specific configuration
+ * (the wire `config` blob) — Alchemy/Cloudflare metadata, the type
+ * discriminator, and the explicit `config` escape hatch on the `Other`
+ * variant.
+ */
+const IDP_METADATA_KEYS = new Set<string>([
+  "name",
+  "type",
+  "adopt",
+  "delete",
+  "baseUrl",
+  "profile",
+  "apiKey",
+  "apiToken",
+  "accountId",
+  "email",
+  "config",
+]);
+
+/**
+ * Build the wire-format `config` blob from props. Strict variants store
+ * config fields flat at the top level; the `Other` variant uses an explicit
+ * nested `config` object as an escape hatch.
+ */
+function extractIdpConfig(
+  props: AccessIdentityProviderProps,
+): Record<string, unknown> {
+  if ("config" in props && props.config) {
+    return camelToSnakeWithSecrets(props.config as Record<string, unknown>);
+  }
+  const flat: Record<string, unknown> = {};
+  for (const [key, value] of Object.entries(
+    props as unknown as Record<string, unknown>,
+  )) {
+    if (!IDP_METADATA_KEYS.has(key) && value !== undefined) {
+      flat[key] = value;
+    }
+  }
+  return camelToSnakeWithSecrets(flat);
+}
+
+/**
  * Convert a camelCase config object to snake_case for the wire, unwrapping
  * any {@link Secret} values along the way. Recurses into arrays of objects
  * (e.g. SAML `headerAttributes`).
- *
- * @internal
  */
 function camelToSnakeWithSecrets(
   input: Record<string, unknown>,
@@ -364,7 +516,6 @@ function transformValue(value: unknown): unknown {
 /**
  * Cloudflare returns 409/400 with an "already exists" message for duplicate
  * IdP names.
- * @internal
  */
 function isAccessDuplicateNameError(err: unknown): boolean {
   if (
@@ -384,7 +535,6 @@ function isAccessDuplicateNameError(err: unknown): boolean {
 
 /**
  * Look up an existing IdP by name across paginated results.
- * @internal
  */
 async function findAccessIdentityProviderByName(
   api: CloudflareApi,
@@ -409,7 +559,6 @@ async function findAccessIdentityProviderByName(
 
 /**
  * Delete an IdP. Cloudflare returns 400 if any Application references it.
- * @internal
  */
 async function deleteAccessIdentityProvider(
   api: CloudflareApi,

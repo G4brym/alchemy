@@ -24,10 +24,8 @@ const otp = await AccessIdentityProvider("otp", {
 const google = await AccessIdentityProvider("google", {
   type: "google",
   name: "Google",
-  config: {
-    clientId: alchemy.secret.env.GOOGLE_CLIENT_ID.unencrypted,
-    clientSecret: alchemy.secret.env.GOOGLE_CLIENT_SECRET,
-  },
+  clientId: alchemy.secret.env.GOOGLE_CLIENT_ID.unencrypted,
+  clientSecret: alchemy.secret.env.GOOGLE_CLIENT_SECRET,
 });
 ```
 
@@ -37,20 +35,18 @@ const google = await AccessIdentityProvider("google", {
 const oidc = await AccessIdentityProvider("idp", {
   type: "oidc",
   name: "Corporate IdP",
-  config: {
-    authUrl: "https://idp.example.com/oauth2/authorize",
-    tokenUrl: "https://idp.example.com/oauth2/token",
-    certsUrl: "https://idp.example.com/oauth2/certs",
-    clientId: "my-app",
-    clientSecret: alchemy.secret.env.IDP_CLIENT_SECRET,
-    scopes: ["openid", "email", "profile"],
-    pkceEnabled: true,
-  },
+  authUrl: "https://idp.example.com/oauth2/authorize",
+  tokenUrl: "https://idp.example.com/oauth2/token",
+  certsUrl: "https://idp.example.com/oauth2/certs",
+  clientId: "my-app",
+  clientSecret: alchemy.secret.env.IDP_CLIENT_SECRET,
+  scopes: ["openid", "email", "profile"],
+  pkceEnabled: true,
 });
 ```
 
 ## Notes
 
 - The `type` field is **immutable** — changing it forces replacement of the underlying Cloudflare resource.
-- The provider's `config.clientSecret` is re-sent on every update; Cloudflare clears it if the field is omitted.
+- `clientSecret` is re-sent on every update; Cloudflare clears it if the field is omitted.
 - Deleting an identity provider fails if any [AccessApplication](./access-application) references it via `allowedIdps`.

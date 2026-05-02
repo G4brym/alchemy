@@ -547,18 +547,27 @@ if (this.phase === "delete") {
 
 #### Internal API Types Convention
 
-Mark internal types used only for API serialization with JSDoc `@internal`:
+Mark **exported** types and functions that are not part of the user-facing API
+with JSDoc `@internal` — for example, helpers exported only so siblings inside
+the same provider can `import` them. Do not add `@internal` to file-private
+declarations: TypeScript's `export` keyword already conveys their visibility,
+so the tag is redundant noise.
 
 ```ts
 /**
- * Raw provider API response for resource creation
+ * Serialise the resource's wire shape. Exported only so sibling resources
+ * in this provider can call it.
  * @internal
  */
+export function serializeResource(resource: Resource): Record<string, unknown> {
+  // ...
+}
+
+// File-private — no `@internal` needed.
 interface ResourceApiResponse {
   id: string;
   name: string;
   created_at: number;
-  // API field names may differ from output
 }
 ```
 

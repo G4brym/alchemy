@@ -30,21 +30,19 @@ describe.skipIf(!process.env.ALL_TESTS)(
         idp = await AccessIdentityProvider(testId, {
           type: "oidc",
           name: `Test OIDC ${testId}`,
-          config: {
-            authUrl: "https://idp.example.com/oauth2/authorize",
-            tokenUrl: "https://idp.example.com/oauth2/token",
-            certsUrl: "https://idp.example.com/oauth2/certs",
-            clientId: "test-client-id",
-            clientSecret: "test-client-secret",
-          },
+          authUrl: "https://idp.example.com/oauth2/authorize",
+          tokenUrl: "https://idp.example.com/oauth2/token",
+          certsUrl: "https://idp.example.com/oauth2/certs",
+          clientId: "test-client-id",
+          clientSecret: "test-client-secret",
         });
         expect(idp.id).toBeTruthy();
         expect(idp.type).toEqual("oidc");
         // Output convention: secrets are always wrapped, even when the user
         // passed a raw string in props.
-        const config = (idp as unknown as { config: { clientSecret: Secret } })
-          .config;
-        expect(config.clientSecret).toBeInstanceOf(Secret);
+        expect(
+          (idp as unknown as { clientSecret: Secret }).clientSecret,
+        ).toBeInstanceOf(Secret);
         const initialId = idp.id;
 
         // Update name (and re-send the secret — Cloudflare requires it on PUT
@@ -52,13 +50,11 @@ describe.skipIf(!process.env.ALL_TESTS)(
         idp = await AccessIdentityProvider(testId, {
           type: "oidc",
           name: `Updated OIDC ${testId}`,
-          config: {
-            authUrl: "https://idp.example.com/oauth2/authorize",
-            tokenUrl: "https://idp.example.com/oauth2/token",
-            certsUrl: "https://idp.example.com/oauth2/certs",
-            clientId: "test-client-id",
-            clientSecret: "test-client-secret",
-          },
+          authUrl: "https://idp.example.com/oauth2/authorize",
+          tokenUrl: "https://idp.example.com/oauth2/token",
+          certsUrl: "https://idp.example.com/oauth2/certs",
+          clientId: "test-client-id",
+          clientSecret: "test-client-secret",
         });
         expect(idp.id).toEqual(initialId);
         expect(idp.name).toEqual(`Updated OIDC ${testId}`);

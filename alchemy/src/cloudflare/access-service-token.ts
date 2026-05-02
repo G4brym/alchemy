@@ -88,10 +88,6 @@ export function isAccessServiceToken(
   return resource?.[ResourceKind] === "cloudflare::AccessServiceToken";
 }
 
-/**
- * Cloudflare wire shape for an Access service token.
- * @internal
- */
 interface CloudflareAccessServiceToken {
   id: string;
   name: string;
@@ -198,7 +194,6 @@ export const AccessServiceToken = Resource(
 /**
  * Cloudflare returns error code 12132 ("Access service token already exists")
  * for duplicate names.
- * @internal
  */
 function isAccessDuplicateNameError(err: unknown): boolean {
   if (
@@ -220,7 +215,6 @@ function isAccessDuplicateNameError(err: unknown): boolean {
 
 /**
  * Look up an existing service token by name across paginated results.
- * @internal
  */
 async function findAccessServiceTokenByName(
   api: CloudflareApi,
@@ -245,7 +239,6 @@ async function findAccessServiceTokenByName(
 
 /**
  * Delete a service token. No-op on 404.
- * @internal
  */
 async function deleteAccessServiceToken(
   api: CloudflareApi,

@@ -83,10 +83,6 @@ export function isAccessGroup(resource: any): resource is AccessGroup {
   return resource?.[ResourceKind] === "cloudflare::AccessGroup";
 }
 
-/**
- * Cloudflare wire shape.
- * @internal
- */
 interface CloudflareAccessGroup {
   id: string;
   name: string;
@@ -115,6 +111,38 @@ interface CloudflareAccessGroup {
  *   name: "Office IPs",
  *   include: [{ ip_list: { id: "<list-uuid>" } }],
  *   exclude: [{ ip: { ip: "203.0.113.99/32" } }],
+ * });
+ *
+ * @example
+ * // Compose groups: admins are engineers who are also on-call. Resources
+ * // can be passed directly — Alchemy lifts `.id` at the wire boundary.
+ * const onCall = await AccessGroup("on-call", {
+ *   include: [{ email_domain: { domain: "acme.com" } }],
+ * });
+ * const admins = await AccessGroup("admins", {
+ *   include: [{ group: { id: engineering } }],
+ *   require: [{ group: { id: onCall } }],
+ * });
+ *
+ * @example
+ * // IdP-bound rules — match Okta groups via an AccessIdentityProvider.
+ * const okta = await AccessIdentityProvider("okta", {
+ *   type: "okta",
+ *   name: "Acme Okta",
+ *   oktaAccount: "acme.okta.com",
+ *   clientId: "...",
+ *   clientSecret: alchemy.secret.env.OKTA_SECRET,
+ * });
+ * const sre = await AccessGroup("sre", {
+ *   include: [{ okta: { name: "sre", identity_provider_id: okta } }],
+ * });
+ *
+ * @example
+ * // Account default — applied implicitly to every Access application.
+ * await AccessGroup("default-deny", {
+ *   isDefault: true,
+ *   include: [{ everyone: {} }],
+ *   exclude: [{ email_domain: { domain: "acme.com" } }],
  * });
  */
 export const AccessGroup = Resource(
@@ -191,7 +219,6 @@ export const AccessGroup = Resource(
   },
 );
 
-/** @internal */
 function isAccessDuplicateNameError(err: unknown): boolean {
   if (
     isCloudflareApiError(err, { status: 409 }) ||
@@ -208,7 +235,6 @@ function isAccessDuplicateNameError(err: unknown): boolean {
   return false;
 }
 
-/** @internal */
 async function findAccessGroupByName(
   api: CloudflareApi,
   name: string,
@@ -230,7 +256,6 @@ async function findAccessGroupByName(
   }
 }
 
-/** @internal */
 async function deleteAccessGroup(
   api: CloudflareApi,
   groupId: string,

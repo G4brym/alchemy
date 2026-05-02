@@ -296,8 +296,6 @@ export function serializeAccessRule(rule: AccessRule): Record<string, unknown> {
  * True for Alchemy Resource objects (carry the {@link ResourceKind} symbol),
  * false for plain literal values — including future rule shapes that may nest
  * literal config objects.
- *
- * @internal
  */
 function isResourceRef(value: unknown): value is { id: string } {
   return (

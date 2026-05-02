@@ -15,7 +15,7 @@ import {
   type CloudflareApi,
   type CloudflareApiOptions,
 } from "./api.ts";
-import type { Zone } from "./zone.ts";
+import { findZoneForHostname, type Zone } from "./zone.ts";
 
 /**
  * Cloudflare Access application types. Three are strictly typed below;
@@ -226,10 +226,6 @@ export function isAccessApplication(
   return resource?.[ResourceKind] === "cloudflare::AccessApplication";
 }
 
-/**
- * Cloudflare wire shape.
- * @internal
- */
 interface CloudflareAccessApplication {
   id: string;
   name: string;
@@ -288,11 +284,10 @@ export const AccessApplication = Resource(
     const api = await createCloudflareApi(props);
     const name = props.name ?? this.scope.createPhysicalName(id);
 
-    // Resolve zone ID if the variant supports zone scoping.
     const zoneId =
       "zone" in props && props.zone
         ? typeof props.zone === "string"
-          ? props.zone
+          ? (await findZoneForHostname(api, props.zone)).zoneId
           : props.zone.id
         : undefined;
 
@@ -443,7 +438,6 @@ export const AccessApplication = Resource(
   },
 );
 
-/** @internal */
 function isAccessDuplicateNameError(err: unknown): boolean {
   if (
     isCloudflareApiError(err, { status: 409 }) ||
@@ -460,7 +454,6 @@ function isAccessDuplicateNameError(err: unknown): boolean {
   return false;
 }
 
-/** @internal */
 async function findAccessApplicationByName(
   api: CloudflareApi,
   basePath: string,
@@ -483,7 +476,6 @@ async function findAccessApplicationByName(
   }
 }
 
-/** @internal */
 async function deleteAccessApplication(
   api: CloudflareApi,
   path: string,

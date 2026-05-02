@@ -166,10 +166,6 @@ export function isAccessPolicy(resource: any): resource is AccessPolicy {
   return resource?.[ResourceKind] === "cloudflare::AccessPolicy";
 }
 
-/**
- * Cloudflare wire shape.
- * @internal
- */
 interface CloudflareAccessPolicy {
   id: string;
   name: string;
@@ -344,7 +340,6 @@ export const AccessPolicy = Resource(
   },
 );
 
-/** @internal */
 function isAccessDuplicateNameError(err: unknown): boolean {
   if (
     isCloudflareApiError(err, { status: 409 }) ||
@@ -361,7 +356,6 @@ function isAccessDuplicateNameError(err: unknown): boolean {
   return false;
 }
 
-/** @internal */
 async function findAccessPolicyByName(
   api: CloudflareApi,
   name: string,
@@ -383,7 +377,6 @@ async function findAccessPolicyByName(
   }
 }
 
-/** @internal */
 async function deleteAccessPolicy(
   api: CloudflareApi,
   policyId: string,
